@@ -5,7 +5,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const ANTHROPIC_API_KEY = "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";
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 
 // Test avec le bon modèle
 (async () => {
