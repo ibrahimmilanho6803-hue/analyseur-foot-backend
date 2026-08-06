@@ -5,7 +5,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const ANTHROPIC_API_KEY = "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";
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const FOOTBALL_API_KEY = process.env.FOOTBALL_API_KEY;
 
 const cache = {};
