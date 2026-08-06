@@ -79,11 +79,9 @@ async function getTeamStanding(teamId) {
   return null;
 }
 
-// Confrontations directes (H2H)
 async function getH2H(teamId1, teamId2) {
   const cacheKey = `h2h_${teamId1}_${teamId2}`;
   if (cache[cacheKey] && Date.now() - cache[cacheKey].timestamp < CACHE_DURATION) return cache[cacheKey].data;
-
   try {
     const res = await fetch(
       `https://api.football-data.org/v4/matches?team=${teamId1}&opponent=${teamId2}&limit=5&status=FINISHED`,
@@ -98,15 +96,12 @@ async function getH2H(teamId1, teamId2) {
         score: `${m.score?.fullTime?.home ?? "-"}-${m.score?.fullTime?.away ?? "-"}`,
         winner: m.score?.winner === "HOME_TEAM" ? "HOME" : m.score?.winner === "AWAY_TEAM" ? "AWAY" : "DRAW",
       }));
-
-      // Calculer le bilan
       let homeWins = 0, awayWins = 0, draws = 0;
       matches.forEach((m) => {
         if (m.winner === "HOME") homeWins++;
         else if (m.winner === "AWAY") awayWins++;
         else draws++;
       });
-
       const result = { matches, bilan: { homeWins, awayWins, draws, total: matches.length } };
       cache[cacheKey] = { data: result, timestamp: Date.now() };
       return result;
@@ -178,6 +173,7 @@ JSON UNIQUEMENT :
   return JSON.parse(text);
 }
 
+// ENDPOINT : Top matchs du jour
 app.get("/api/top-matches", async (req, res) => {
   try {
     console.log("Recherche des matchs du jour...");
@@ -194,7 +190,7 @@ app.get("/api/top-matches", async (req, res) => {
     const analyses = [];
     for (const match of allMatches.slice(0, 15)) {
       try {
-        let statsHome = null, statsAway = null;
+        let statsHome = null, statsAway = null, h2h = null;
         if (match.homeTeamId) {
           const standing = await getTeamStanding(match.homeTeamId);
           const form = await getTeamForm(match.homeTeamId);
@@ -215,9 +211,14 @@ app.get("/api/top-matches", async (req, res) => {
           ).join("") || "N/A";
           statsAway = { ...standing, form: lastResults };
         }
-        const analysis = await analyzeMatch({ ...match, statsHome, statsAway });
-        analyses.push({ ...match, ...analysis, statsHome, statsAway });
-      } catch (e) { console.log(`Erreur analyse ${match.homeTeam} vs ${match.awayTeam}: ${e.message}`); }
+        if (match.homeTeamId && match.awayTeamId) {
+          h2h = await getH2H(match.homeTeamId, match.awayTeamId);
+        }
+        const analysis = await analyzeMatch({ ...match, statsHome, statsAway, h2h });
+        analyses.push({ ...match, ...analysis, statsHome, statsAway, h2h });
+      } catch (e) {
+        console.log(`Erreur analyse ${match.homeTeam} vs ${match.awayTeam}: ${e.message}`);
+      }
     }
     const sorted = analyses.filter((a) => a.probabilite >= 60 && a.niveauConfiance !== "faible").sort((a, b) => b.probabilite - a.probabilite).slice(0, 3);
     console.log(`Top 3 matchs selectionnes`);
@@ -227,19 +228,11 @@ app.get("/api/top-matches", async (req, res) => {
   }
 });
 
-// H2H
-let h2h = null;
-if (match.homeTeamId && match.awayTeamId) {
-  h2h = await getH2H(match.homeTeamId, match.awayTeamId);
-}
-
-const analysis = await analyzeMatch({ ...match, statsHome, statsAway, h2h });
-analyses.push({ ...match, ...analysis, statsHome, statsAway, h2h });
-
+// Endpoint analyse manuelle
 app.post("/api/analyze", async (req, res) => {
   try {
     const { equipe1, equipe2, typePari } = req.body;
-    let statsHome = null, statsAway = null;
+    let statsHome = null, statsAway = null, h2h = null;
     const [teams1, teams2] = await Promise.all([searchTeam(equipe1), searchTeam(equipe2)]);
 
     if (teams1.length > 0) {
@@ -261,6 +254,9 @@ app.post("/api/analyze", async (req, res) => {
           : (m.score?.winner === "AWAY_TEAM" ? "V" : m.score?.winner === "HOME_TEAM" ? "D" : "N")
       ).join("") || "N/A";
       statsAway = { ...standing, form: lastResults };
+    }
+    if (teams1.length > 0 && teams2.length > 0) {
+      h2h = await getH2H(teams1[0].id, teams2[0].id);
     }
 
     const prompt = `Tu es un analyste de football expert avec 20 ans d'experience. Analyse ce match en profondeur.
@@ -296,6 +292,23 @@ CONSIGNES D'ANALYSE :
 Reponds UNIQUEMENT en JSON :
 {"probabilite": 00, "justification": "analyse detaillee basee sur stats et H2H"}`;
 
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
+      body: JSON.stringify({ model: "claude-sonnet-5", max_tokens: 500, messages: [{ role: "user", content: prompt }] }),
+    });
+
+    const data = await response.json();
+    const text = (data.content || []).map((b) => b.text || "").join("").replace(/```json|```/g, "").trim();
+    const result = JSON.parse(text);
+
+    res.json({ ...result, statsEquipe1: statsHome, statsEquipe2: statsAway, h2h, equipesTrouvees1: teams1.length > 0, equipesTrouvees2: teams2.length > 0 });
+  } catch (error) {
+    console.error("Erreur analyse:", error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.post("/api/analyze-simple", async (req, res) => {
   try {
     const response = await fetch("https://api.anthropic.com/v1/messages", {
@@ -309,8 +322,6 @@ app.post("/api/analyze-simple", async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
-
-res.json({ ...result, statsEquipe1: statsHome, statsEquipe2: statsAway, h2h, equipesTrouvees1: teams1.length > 0, equipesTrouvees2: teams2.length > 0 });
 
 app.listen(3001, () => {
   console.log("Serveur demarre sur http://localhost:3001");
