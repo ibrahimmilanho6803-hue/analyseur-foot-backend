@@ -5,7 +5,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+const ANTHROPIC_API_KEY = "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";
 const FOOTBALL_API_KEY = process.env.FOOTBALL_API_KEY;
 
 const cache = {};
@@ -42,12 +42,14 @@ async function searchTeam(teamName) {
 async function getTeamForm(teamId) {
   const cacheKey = `form_${teamId}`;
   if (cache[cacheKey] && Date.now() - cache[cacheKey].timestamp < CACHE_DURATION) return cache[cacheKey].data;
-  const res = await fetch(`https://api.football-data.org/v4/teams/${teamId}/matches?limit=10&status=FINISHED`, {
-    headers: { "X-Auth-Token": FOOTBALL_API_KEY },
-  });
-  const data = await res.json();
-  cache[cacheKey] = { data, timestamp: Date.now() };
-  return data;
+  try {
+    const res = await fetch(`https://api.football-data.org/v4/teams/${teamId}/matches?limit=10&status=FINISHED`, {
+      headers: { "X-Auth-Token": FOOTBALL_API_KEY },
+    });
+    const data = await res.json();
+    cache[cacheKey] = { data, timestamp: Date.now() };
+    return data;
+  } catch (e) { return null; }
 }
 
 async function getTeamStanding(teamId) {
@@ -64,7 +66,7 @@ async function getTeamStanding(teamId) {
           const team = standing.table?.find((t) => t.team.id === teamId);
           if (team) {
             const result = {
-              position: team.position, team: team.team, playedGames: team.playedGames,
+              position: team.position, playedGames: team.playedGames,
               won: team.won, draw: team.draw, lost: team.lost, points: team.points,
               goalsFor: team.goalsFor, goalsAgainst: team.goalsAgainst,
               goalDifference: team.goalDifference, competition: data.competition?.name,
@@ -84,29 +86,35 @@ async function getH2H(teamId1, teamId2) {
   if (cache[cacheKey] && Date.now() - cache[cacheKey].timestamp < CACHE_DURATION) return cache[cacheKey].data;
   try {
     const res = await fetch(
-      `https://api.football-data.org/v4/matches?team=${teamId1}&opponent=${teamId2}&limit=5&status=FINISHED`,
+      `https://api.football-data.org/v4/teams/${teamId1}/matches?limit=30&status=FINISHED`,
       { headers: { "X-Auth-Token": FOOTBALL_API_KEY } }
     );
     if (res.ok) {
       const data = await res.json();
-      const matches = (data.matches || []).map((m) => ({
+      const h2hMatches = (data.matches || []).filter(
+        (m) => m.homeTeam?.id === teamId2 || m.awayTeam?.id === teamId2
+      ).slice(0, 5);
+      
+      const matches = h2hMatches.map((m) => ({
         date: m.utcDate?.slice(0, 10),
         homeTeam: m.homeTeam?.name,
         awayTeam: m.awayTeam?.name,
-        score: `${m.score?.fullTime?.home ?? "-"}-${m.score?.fullTime?.away ?? "-"}`,
+        score: (m.score?.fullTime?.home ?? "-") + "-" + (m.score?.fullTime?.away ?? "-"),
         winner: m.score?.winner === "HOME_TEAM" ? "HOME" : m.score?.winner === "AWAY_TEAM" ? "AWAY" : "DRAW",
       }));
+      
       let homeWins = 0, awayWins = 0, draws = 0;
       matches.forEach((m) => {
         if (m.winner === "HOME") homeWins++;
         else if (m.winner === "AWAY") awayWins++;
         else draws++;
       });
+      
       const result = { matches, bilan: { homeWins, awayWins, draws, total: matches.length } };
       cache[cacheKey] = { data: result, timestamp: Date.now() };
       return result;
     }
-  } catch (e) {}
+  } catch (e) { console.log("Erreur H2H:", e.message); }
   return null;
 }
 
@@ -130,38 +138,24 @@ async function getTodayMatches(leagueCode) {
 }
 
 async function analyzeMatch(matchInfo) {
-  const prompt = `Tu es un analyste de football expert. Analyse ce match avec les statistiques reelles fournies et choisis le meilleur pari parmi cette liste :
-- Victoire domicile
-- Victoire extérieur
-- Match nul
-- Victoire ou nul domicile
-- Victoire ou nul extérieur
-- Plus de 2.5 buts
-- Moins de 2.5 buts
-- Total buts 1.5 plus
-- Equipe domicile 0.5 buts plus
-- Equipe extérieur 0.5 buts plus
-- Victoire/nul domicile + 0.5 buts plus
-- Victoire/nul extérieur + 0.5 buts plus
-- Victoire/nul domicile + 1.5 buts plus
-- Victoire/nul extérieur + 1.5 buts plus
-- Les deux equipes marquent
+  let h2hText = "";
+  if (matchInfo.h2h && matchInfo.h2h.matches && matchInfo.h2h.matches.length > 0) {
+    h2hText = "H2H: ";
+    matchInfo.h2h.matches.forEach((m) => {
+      h2hText += m.homeTeam + " " + m.score + " " + m.awayTeam + ", ";
+    });
+    h2hText += "Bilan: " + matchInfo.h2h.bilan.homeWins + "V dom - " + matchInfo.h2h.bilan.draws + "N - " + matchInfo.h2h.bilan.awayWins + "V ext.";
+  }
 
-MATCH : ${matchInfo.homeTeam} (DOMICILE) vs ${matchInfo.awayTeam} (EXTERIEUR)
-Championnat : ${matchInfo.competition || "Inconnu"}
+  let homeText = matchInfo.statsHome 
+    ? "STATS " + matchInfo.homeTeam + ": " + (matchInfo.statsHome.position || "?") + "e, " + matchInfo.statsHome.won + "V/" + matchInfo.statsHome.draw + "N/" + matchInfo.statsHome.lost + "D, Buts: " + matchInfo.statsHome.goalsFor + "/" + matchInfo.statsHome.goalsAgainst + ", Forme: " + matchInfo.statsHome.form
+    : "Pas de stats pour " + matchInfo.homeTeam;
 
-${matchInfo.statsHome ? `STATS ${matchInfo.homeTeam} : ${matchInfo.statsHome.position || "?"}e (${matchInfo.statsHome.points || 0} pts), ${matchInfo.statsHome.won}V/${matchInfo.statsHome.draw}N/${matchInfo.statsHome.lost}D, Buts: ${matchInfo.statsHome.goalsFor}/${matchInfo.statsHome.goalsAgainst} (${matchInfo.statsHome.goalDifference > 0 ? "+" : ""}${matchInfo.statsHome.goalDifference}), Forme: ${matchInfo.statsHome.form}` : `Aucune stat pour ${matchInfo.homeTeam}`}
+  let awayText = matchInfo.statsAway
+    ? "STATS " + matchInfo.awayTeam + ": " + (matchInfo.statsAway.position || "?") + "e, " + matchInfo.statsAway.won + "V/" + matchInfo.statsAway.draw + "N/" + matchInfo.statsAway.lost + "D, Buts: " + matchInfo.statsAway.goalsFor + "/" + matchInfo.statsAway.goalsAgainst + ", Forme: " + matchInfo.statsAway.form
+    : "Pas de stats pour " + matchInfo.awayTeam;
 
-${matchInfo.statsAway ? `STATS ${matchInfo.awayTeam} : ${matchInfo.statsAway.position || "?"}e (${matchInfo.statsAway.points || 0} pts), ${matchInfo.statsAway.won}V/${matchInfo.statsAway.draw}N/${matchInfo.statsAway.lost}D, Buts: ${matchInfo.statsAway.goalsFor}/${matchInfo.statsAway.goalsAgainst} (${matchInfo.statsAway.goalDifference > 0 ? "+" : ""}${matchInfo.statsAway.goalDifference}), Forme: ${matchInfo.statsAway.form}` : `Aucune stat pour ${matchInfo.awayTeam}`}
-
-${matchInfo.h2h ? `CONFRONTATIONS DIRECTES (5 derniers matchs) :
-${matchInfo.h2h.matches.map((m) => `- ${m.homeTeam} ${m.score} ${m.awayTeam}`).join("\n")}
-Bilan : ${matchInfo.h2h.bilan.homeWins} victoires domicile, ${matchInfo.h2h.bilan.draws} nuls, ${matchInfo.h2h.bilan.awayWins} victoires exterieur` : "Aucune confrontation directe trouvee"}
-
-Choisis le pari le plus SUR et FIABLE selon les stats ET l'historique des confrontations. Privilegie les paris a haute probabilite (>65%).
-
-JSON UNIQUEMENT :
-{"meilleurPari": "un de la liste exactement", "probabilite": 00, "justification": "courte basee sur stats et H2H", "niveauConfiance": "eleve/moyen/faible"}`;
+  const prompt = "Analyse ce match de football. " + homeText + ". " + awayText + ". " + h2hText + " Match: " + matchInfo.homeTeam + " (domicile) vs " + matchInfo.awayTeam + " (exterieur). Championnat: " + (matchInfo.competition || "Inconnu") + ". Choisis le meilleur pari parmi: Victoire domicile, Victoire exterieur, Match nul, Victoire ou nul domicile, Victoire ou nul exterieur, Plus de 2.5 buts, Moins de 2.5 buts, Total buts 1.5 plus, Equipe domicile 0.5 buts plus, Equipe exterieur 0.5 buts plus, Victoire/nul domicile + 0.5 buts plus, Victoire/nul exterieur + 0.5 buts plus, Victoire/nul domicile + 1.5 buts plus, Victoire/nul exterieur + 1.5 buts plus, Les deux equipes marquent. Reponds UNIQUEMENT avec ce JSON: {\"meilleurPari\":\"...\",\"probabilite\":00,\"justification\":\"...\",\"niveauConfiance\":\"eleve/moyen/faible\"}";
 
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -173,7 +167,6 @@ JSON UNIQUEMENT :
   return JSON.parse(text);
 }
 
-// ENDPOINT : Top matchs du jour
 app.get("/api/top-matches", async (req, res) => {
   try {
     console.log("Recherche des matchs du jour...");
@@ -186,7 +179,7 @@ app.get("/api/top-matches", async (req, res) => {
       }));
       allMatches = [...allMatches, ...matchList];
     }
-    console.log(`${allMatches.length} matchs trouves`);
+    console.log(allMatches.length + " matchs trouves");
     const analyses = [];
     for (const match of allMatches.slice(0, 15)) {
       try {
@@ -217,18 +210,16 @@ app.get("/api/top-matches", async (req, res) => {
         const analysis = await analyzeMatch({ ...match, statsHome, statsAway, h2h });
         analyses.push({ ...match, ...analysis, statsHome, statsAway, h2h });
       } catch (e) {
-        console.log(`Erreur analyse ${match.homeTeam} vs ${match.awayTeam}: ${e.message}`);
+        console.log("Erreur analyse " + match.homeTeam + " vs " + match.awayTeam + ": " + e.message);
       }
     }
     const sorted = analyses.filter((a) => a.probabilite >= 60 && a.niveauConfiance !== "faible").sort((a, b) => b.probabilite - a.probabilite).slice(0, 3);
-    console.log(`Top 3 matchs selectionnes`);
     res.json({ topMatches: sorted, totalAnalyse: analyses.length });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// Endpoint analyse manuelle
 app.post("/api/analyze", async (req, res) => {
   try {
     const { equipe1, equipe2, typePari } = req.body;
@@ -259,52 +250,44 @@ app.post("/api/analyze", async (req, res) => {
       h2h = await getH2H(teams1[0].id, teams2[0].id);
     }
 
-    const prompt = `Tu es un analyste de football expert avec 20 ans d'experience. Analyse ce match en profondeur.
+    let h2hText = "";
+    if (h2h && h2h.matches && h2h.matches.length > 0) {
+      h2hText = "H2H: ";
+      h2h.matches.forEach((m) => {
+        h2hText += m.homeTeam + " " + m.score + " " + m.awayTeam + ", ";
+      });
+      h2hText += "Bilan: " + h2h.bilan.homeWins + "V dom - " + h2h.bilan.draws + "N - " + h2h.bilan.awayWins + "V ext.";
+    }
 
-MATCH : ${equipe1} (DOMICILE) vs ${equipe2} (EXTERIEUR)
-PARI A EVALUER : "${typePari}"
+    let homeText = statsHome 
+      ? "STATS " + equipe1 + ": " + (statsHome.position || "?") + "e, " + statsHome.won + "V/" + statsHome.draw + "N/" + statsHome.lost + "D, Buts: " + statsHome.goalsFor + "/" + statsHome.goalsAgainst + ", Forme: " + statsHome.form
+      : "Pas de stats pour " + equipe1;
 
-${statsHome ? `STATS ${equipe1} :
-- Classement : ${statsHome.position || "?"}e (${statsHome.points || 0} pts)
-- Bilan : ${statsHome.won || 0}V ${statsHome.draw || 0}N ${statsHome.lost || 0}D
-- Buts marques/encaisses : ${statsHome.goalsFor || 0}/${statsHome.goalsAgainst || 0}
-- Moyenne buts marques/match : ${statsHome.playedGames ? (statsHome.goalsFor / statsHome.playedGames).toFixed(1) : "?"}
-- Forme recente (5 matchs) : ${statsHome.form || "N/A"}` : `Aucune statistique pour ${equipe1}`}
+    let awayText = statsAway
+      ? "STATS " + equipe2 + ": " + (statsAway.position || "?") + "e, " + statsAway.won + "V/" + statsAway.draw + "N/" + statsAway.lost + "D, Buts: " + statsAway.goalsFor + "/" + statsAway.goalsAgainst + ", Forme: " + statsAway.form
+      : "Pas de stats pour " + equipe2;
 
-${statsAway ? `STATS ${equipe2} :
-- Classement : ${statsAway.position || "?"}e (${statsAway.points || 0} pts)
-- Bilan : ${statsAway.won || 0}V ${statsAway.draw || 0}N ${statsAway.lost || 0}D
-- Buts marques/encaisses : ${statsAway.goalsFor || 0}/${statsAway.goalsAgainst || 0}
-- Moyenne buts marques/match : ${statsAway.playedGames ? (statsAway.goalsFor / statsAway.playedGames).toFixed(1) : "?"}
-- Forme recente (5 matchs) : ${statsAway.form || "N/A"}` : `Aucune statistique pour ${equipe2}`}
+    const prompt = "Analyse ce match de football. " + homeText + ". " + awayText + ". " + h2hText + " Match: " + equipe1 + " (domicile) vs " + equipe2 + " (exterieur). Pari a evaluer: " + typePari + ". Donne la probabilite (0-100) que ce pari se realise. Reponds UNIQUEMENT avec ce JSON: {\"probabilite\": 00, \"justification\": \"phrase courte\"}";
 
-${h2h ? `CONFRONTATIONS DIRECTES (5 derniers matchs) :
-${h2h.matches.map((m) => `- ${m.homeTeam} ${m.score} ${m.awayTeam}`).join("\n")}
-Bilan : ${h2h.bilan.homeWins}V domicile - ${h2h.bilan.draws}N - ${h2h.bilan.awayWins}V exterieur` : "Aucune confrontation trouvee"}
-
-CONSIGNES D'ANALYSE :
-- Compare la force des equipes (classement, forme, attaque, defense)
-- Prends en compte l'avantage du domicile pour ${equipe1}
-- Analyse l'historique des confrontations directes
-- Analyse si les equipes marquent/encaissent beaucoup de buts
-- Verifie la coherence du pari "${typePari}" avec TOUTES les donnees
-
-Reponds UNIQUEMENT en JSON :
-{"probabilite": 00, "justification": "analyse detaillee basee sur stats et H2H"}`;
+    console.log("Prompt:", prompt.substring(0, 200));
 
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify({ model: "claude-sonnet-5", max_tokens: 500, messages: [{ role: "user", content: prompt }] }),
+      body: JSON.stringify({ model: "claude-sonnet-5", max_tokens: 400, messages: [{ role: "user", content: prompt }] }),
     });
 
     const data = await response.json();
+    console.log("Status:", response.status);
+    console.log("Reponse:", JSON.stringify(data).substring(0, 300));
+    
     const text = (data.content || []).map((b) => b.text || "").join("").replace(/```json|```/g, "").trim();
+    console.log("Texte:", text);
+    
     const result = JSON.parse(text);
-
     res.json({ ...result, statsEquipe1: statsHome, statsEquipe2: statsAway, h2h, equipesTrouvees1: teams1.length > 0, equipesTrouvees2: teams2.length > 0 });
   } catch (error) {
-    console.error("Erreur analyse:", error.message);
+    console.error("Erreur:", error.message);
     res.status(500).json({ error: error.message });
   }
 });
