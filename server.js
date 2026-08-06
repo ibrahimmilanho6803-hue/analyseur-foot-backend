@@ -19,11 +19,9 @@ const LEAGUES = [
   { code: "FL1", name: "Ligue 1" },
 ];
 
-// Chercher une équipe
 async function searchTeam(teamName) {
   const cacheKey = `team_${teamName.toLowerCase()}`;
   if (cache[cacheKey] && Date.now() - cache[cacheKey].timestamp < CACHE_DURATION) return cache[cacheKey].data;
-
   let teams = [];
   for (const league of LEAGUES) {
     try {
@@ -41,11 +39,9 @@ async function searchTeam(teamName) {
   return teams;
 }
 
-// Forme récente
 async function getTeamForm(teamId) {
   const cacheKey = `form_${teamId}`;
   if (cache[cacheKey] && Date.now() - cache[cacheKey].timestamp < CACHE_DURATION) return cache[cacheKey].data;
-
   const res = await fetch(`https://api.football-data.org/v4/teams/${teamId}/matches?limit=10&status=FINISHED`, {
     headers: { "X-Auth-Token": FOOTBALL_API_KEY },
   });
@@ -54,11 +50,9 @@ async function getTeamForm(teamId) {
   return data;
 }
 
-// Classement
 async function getTeamStanding(teamId) {
   const cacheKey = `standing_${teamId}`;
   if (cache[cacheKey] && Date.now() - cache[cacheKey].timestamp < CACHE_DURATION) return cache[cacheKey].data;
-
   for (const league of LEAGUES) {
     try {
       const res = await fetch(`https://api.football-data.org/v4/competitions/${league.code}/standings`, {
@@ -85,14 +79,11 @@ async function getTeamStanding(teamId) {
   return null;
 }
 
-// Récupérer les matchs du jour pour un championnat
 async function getTodayMatches(leagueCode) {
   const cacheKey = `matches_${leagueCode}`;
   if (cache[cacheKey] && Date.now() - cache[cacheKey].timestamp < 15 * 60 * 1000) return cache[cacheKey].data;
-
   const today = new Date().toISOString().slice(0, 10);
   const nextWeek = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-
   try {
     const res = await fetch(
       `https://api.football-data.org/v4/competitions/${leagueCode}/matches?dateFrom=${today}&dateTo=${nextWeek}&status=SCHEDULED`,
@@ -107,85 +98,63 @@ async function getTodayMatches(leagueCode) {
   return [];
 }
 
-// Analyser un match avec Claude
 async function analyzeMatch(matchInfo) {
-  const prompt = `Tu es un analyste de football expert. Analyse ce match avec les statistiques reelles fournies.
+  const prompt = `Tu es un analyste de football expert. Analyse ce match avec les statistiques reelles fournies et choisis le meilleur pari parmi cette liste :
+- Victoire domicile
+- Victoire extérieur
+- Match nul
+- Victoire ou nul domicile
+- Victoire ou nul extérieur
+- Plus de 2.5 buts
+- Moins de 2.5 buts
+- Total buts 1.5 plus
+- Equipe domicile 0.5 buts plus
+- Equipe extérieur 0.5 buts plus
+- Victoire/nul domicile + 0.5 buts plus
+- Victoire/nul extérieur + 0.5 buts plus
+- Victoire/nul domicile + 1.5 buts plus
+- Victoire/nul extérieur + 1.5 buts plus
+- Les deux equipes marquent
 
 MATCH : ${matchInfo.homeTeam} (DOMICILE) vs ${matchInfo.awayTeam} (EXTERIEUR)
 Championnat : ${matchInfo.competition || "Inconnu"}
-Date : ${matchInfo.date || "Non precisee"}
 
-STATISTIQUES ${matchInfo.homeTeam} :
-${matchInfo.statsHome ? `
-- Classement : ${matchInfo.statsHome.position || "?"}e (${matchInfo.statsHome.points || 0} pts)
-- Bilan : ${matchInfo.statsHome.won || 0}V ${matchInfo.statsHome.draw || 0}N ${matchInfo.statsHome.lost || 0}D
-- Buts : ${matchInfo.statsHome.goalsFor || 0} marques / ${matchInfo.statsHome.goalsAgainst || 0} encaisses
-- Forme : ${matchInfo.statsHome.form || "N/A"}
-` : 'Aucune statistique trouvee'}
+${matchInfo.statsHome ? `STATS ${matchInfo.homeTeam} : ${matchInfo.statsHome.position || "?"}e (${matchInfo.statsHome.points || 0} pts), ${matchInfo.statsHome.won}V/${matchInfo.statsHome.draw}N/${matchInfo.statsHome.lost}D, Buts: ${matchInfo.statsHome.goalsFor}/${matchInfo.statsHome.goalsAgainst} (${matchInfo.statsHome.goalDifference > 0 ? "+" : ""}${matchInfo.statsHome.goalDifference}), Forme: ${matchInfo.statsHome.form}` : `Aucune stat pour ${matchInfo.homeTeam}`}
 
-STATISTIQUES ${matchInfo.awayTeam} :
-${matchInfo.statsAway ? `
-- Classement : ${matchInfo.statsAway.position || "?"}e (${matchInfo.statsAway.points || 0} pts)
-- Bilan : ${matchInfo.statsAway.won || 0}V ${matchInfo.statsAway.draw || 0}N ${matchInfo.statsAway.lost || 0}D
-- Buts : ${matchInfo.statsAway.goalsFor || 0} marques / ${matchInfo.statsAway.goalsAgainst || 0} encaisses
-- Forme : ${matchInfo.statsAway.form || "N/A"}
-` : 'Aucune statistique trouvee'}
+${matchInfo.statsAway ? `STATS ${matchInfo.awayTeam} : ${matchInfo.statsAway.position || "?"}e (${matchInfo.statsAway.points || 0} pts), ${matchInfo.statsAway.won}V/${matchInfo.statsAway.draw}N/${matchInfo.statsAway.lost}D, Buts: ${matchInfo.statsAway.goalsFor}/${matchInfo.statsAway.goalsAgainst} (${matchInfo.statsAway.goalDifference > 0 ? "+" : ""}${matchInfo.statsAway.goalDifference}), Forme: ${matchInfo.statsAway.form}` : `Aucune stat pour ${matchInfo.awayTeam}`}
 
-Donne UNIQUEMENT un JSON :
-{
-  "meilleurPari": "un parmi: Victoire domicile, Victoire exterieur, Match nul, Plus de 2.5 buts, Moins de 2.5 buts, Les deux equipes marquent",
-  "probabilite": 00,
-  "justification": "analyse courte basee sur les stats",
-  "niveauConfiance": "eleve/moyen/faible"
-}`;
+Choisis le pari le plus SUR et FIABLE selon les stats. Privilegie les paris a haute probabilite (>65%).
+
+JSON UNIQUEMENT :
+{"meilleurPari": "un de la liste exactement", "probabilite": 00, "justification": "courte basee sur les stats", "niveauConfiance": "eleve/moyen/faible"}`;
 
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": ANTHROPIC_API_KEY,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: "claude-sonnet-5",
-      max_tokens: 400,
-      messages: [{ role: "user", content: prompt }],
-    }),
+    headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
+    body: JSON.stringify({ model: "claude-sonnet-5", max_tokens: 400, messages: [{ role: "user", content: prompt }] }),
   });
-
   const data = await response.json();
   const text = (data.content || []).map((b) => b.text || "").join("").replace(/```json|```/g, "").trim();
   return JSON.parse(text);
 }
 
-// ENDPOINT : Top matchs du jour
 app.get("/api/top-matches", async (req, res) => {
   try {
     console.log("Recherche des matchs du jour...");
     let allMatches = [];
-
     for (const league of LEAGUES) {
       const matches = await getTodayMatches(league.code);
       const matchList = matches.slice(0, 5).map((m) => ({
-        id: m.id,
-        homeTeam: m.homeTeam?.name || "Inconnu",
-        awayTeam: m.awayTeam?.name || "Inconnu",
-        homeTeamId: m.homeTeam?.id,
-        awayTeamId: m.awayTeam?.id,
-        date: m.utcDate,
-        competition: league.name,
+        id: m.id, homeTeam: m.homeTeam?.name || "Inconnu", awayTeam: m.awayTeam?.name || "Inconnu",
+        homeTeamId: m.homeTeam?.id, awayTeamId: m.awayTeam?.id, date: m.utcDate, competition: league.name,
       }));
       allMatches = [...allMatches, ...matchList];
     }
-
     console.log(`${allMatches.length} matchs trouves`);
-
-    // Analyser chaque match
     const analyses = [];
     for (const match of allMatches.slice(0, 15)) {
       try {
         let statsHome = null, statsAway = null;
-
         if (match.homeTeamId) {
           const standing = await getTeamStanding(match.homeTeamId);
           const form = await getTeamForm(match.homeTeamId);
@@ -196,7 +165,6 @@ app.get("/api/top-matches", async (req, res) => {
           ).join("") || "N/A";
           statsHome = { ...standing, form: lastResults };
         }
-
         if (match.awayTeamId) {
           const standing = await getTeamStanding(match.awayTeamId);
           const form = await getTeamForm(match.awayTeamId);
@@ -207,35 +175,22 @@ app.get("/api/top-matches", async (req, res) => {
           ).join("") || "N/A";
           statsAway = { ...standing, form: lastResults };
         }
-
         const analysis = await analyzeMatch({ ...match, statsHome, statsAway });
         analyses.push({ ...match, ...analysis, statsHome, statsAway });
-      } catch (e) {
-        console.log(`Erreur analyse ${match.homeTeam} vs ${match.awayTeam}: ${e.message}`);
-      }
+      } catch (e) { console.log(`Erreur analyse ${match.homeTeam} vs ${match.awayTeam}: ${e.message}`); }
     }
-
-    // Trier par probabilité et niveau de confiance
-    const sorted = analyses
-      .filter((a) => a.probabilite >= 60 && a.niveauConfiance !== "faible")
-      .sort((a, b) => b.probabilite - a.probabilite)
-      .slice(0, 3);
-
+    const sorted = analyses.filter((a) => a.probabilite >= 60 && a.niveauConfiance !== "faible").sort((a, b) => b.probabilite - a.probabilite).slice(0, 3);
     console.log(`Top 3 matchs selectionnes`);
     res.json({ topMatches: sorted, totalAnalyse: analyses.length });
   } catch (error) {
-    console.error("Erreur:", error.message);
     res.status(500).json({ error: error.message });
   }
 });
 
-// Endpoint analyse simple
 app.post("/api/analyze", async (req, res) => {
   try {
     const { equipe1, equipe2, typePari } = req.body;
-
     let statsHome = null, statsAway = null;
-
     const [teams1, teams2] = await Promise.all([searchTeam(equipe1), searchTeam(equipe2)]);
 
     if (teams1.length > 0) {
@@ -248,7 +203,6 @@ app.post("/api/analyze", async (req, res) => {
       ).join("") || "N/A";
       statsHome = { ...standing, form: lastResults };
     }
-
     if (teams2.length > 0) {
       const standing = await getTeamStanding(teams2[0].id);
       const form = await getTeamForm(teams2[0].id);
@@ -260,34 +214,54 @@ app.post("/api/analyze", async (req, res) => {
       statsAway = { ...standing, form: lastResults };
     }
 
-    const prompt = `Tu es un analyste de football expert.
+    const prompt = `Tu es un analyste de football expert avec 20 ans d'experience. Analyse ce match en profondeur.
 
 MATCH : ${equipe1} (DOMICILE) vs ${equipe2} (EXTERIEUR)
 PARI A EVALUER : "${typePari}"
 
-${statsHome ? `STATS ${equipe1} : ${statsHome.position || "?"}e, ${statsHome.won}V/${statsHome.draw}N/${statsHome.lost}D, Buts: ${statsHome.goalsFor}/${statsHome.goalsAgainst}, Forme: ${statsHome.form}` : `Aucune stat pour ${equipe1}`}
-${statsAway ? `STATS ${equipe2} : ${statsAway.position || "?"}e, ${statsAway.won}V/${statsAway.draw}N/${statsAway.lost}D, Buts: ${statsAway.goalsFor}/${statsAway.goalsAgainst}, Forme: ${statsAway.form}` : `Aucune stat pour ${equipe2}`}
+${statsHome ? `STATS ${equipe1} :
+- Classement : ${statsHome.position || "?"}e (${statsHome.points || 0} pts)
+- Bilan : ${statsHome.won || 0}V ${statsHome.draw || 0}N ${statsHome.lost || 0}D
+- Buts marques/encaisses : ${statsHome.goalsFor || 0}/${statsHome.goalsAgainst || 0}
+- Moyenne buts marques/match : ${statsHome.playedGames ? (statsHome.goalsFor / statsHome.playedGames).toFixed(1) : "?"}
+- Forme recente (5 matchs) : ${statsHome.form || "N/A"}` : `Aucune statistique pour ${equipe1}`}
 
-Estime la probabilite (0-100) que ce pari se realise. Base-toi sur les stats.
-JSON: {"probabilite": 00, "justification": "courte"}`;
+${statsAway ? `STATS ${equipe2} :
+- Classement : ${statsAway.position || "?"}e (${statsAway.points || 0} pts)
+- Bilan : ${statsAway.won || 0}V ${statsAway.draw || 0}N ${statsAway.lost || 0}D
+- Buts marques/encaisses : ${statsAway.goalsFor || 0}/${statsAway.goalsAgainst || 0}
+- Moyenne buts marques/match : ${statsAway.playedGames ? (statsAway.goalsFor / statsAway.playedGames).toFixed(1) : "?"}
+- Forme recente (5 matchs) : ${statsAway.form || "N/A"}` : `Aucune statistique pour ${equipe2}`}
+
+CONSIGNES D'ANALYSE :
+- Compare la force des equipes (classement, forme, attaque, defense)
+- Prends en compte l'avantage du domicile pour ${equipe1}
+- Analyse si les equipes marquent/encaissent beaucoup de buts
+- Verifie la coherence du pari "${typePari}" avec les statistiques
+- Si le pari est un combine (ex: victoire/nul + buts), analyse chaque condition separement puis ensemble
+
+IMPORTANT : Sois honnete et precis. Base-toi UNIQUEMENT sur les stats fournies. Si les donnees sont insuffisantes, donne une estimation prudente.
+
+Reponds UNIQUEMENT en JSON (pas de texte avant/apres) :
+{"probabilite": 00, "justification": "analyse detaillee basee sur les stats"}`;
 
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify({ model: "claude-sonnet-5", max_tokens: 400, messages: [{ role: "user", content: prompt }] }),
+      body: JSON.stringify({ model: "claude-sonnet-5", max_tokens: 500, messages: [{ role: "user", content: prompt }] }),
     });
 
     const data = await response.json();
     const text = (data.content || []).map((b) => b.text || "").join("").replace(/```json|```/g, "").trim();
     const result = JSON.parse(text);
 
-    res.json({ ...result, statsEquipe1: statsHome, statsEquipe2: statsAway });
+    res.json({ ...result, statsEquipe1: statsHome, statsEquipe2: statsAway, equipesTrouvees1: teams1.length > 0, equipesTrouvees2: teams2.length > 0 });
   } catch (error) {
+    console.error("Erreur analyse:", error.message);
     res.status(500).json({ error: error.message });
   }
 });
 
-// Endpoint simple (generation auto)
 app.post("/api/analyze-simple", async (req, res) => {
   try {
     const response = await fetch("https://api.anthropic.com/v1/messages", {
