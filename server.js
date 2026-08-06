@@ -79,6 +79,42 @@ async function getTeamStanding(teamId) {
   return null;
 }
 
+// Confrontations directes (H2H)
+async function getH2H(teamId1, teamId2) {
+  const cacheKey = `h2h_${teamId1}_${teamId2}`;
+  if (cache[cacheKey] && Date.now() - cache[cacheKey].timestamp < CACHE_DURATION) return cache[cacheKey].data;
+
+  try {
+    const res = await fetch(
+      `https://api.football-data.org/v4/matches?team=${teamId1}&opponent=${teamId2}&limit=5&status=FINISHED`,
+      { headers: { "X-Auth-Token": FOOTBALL_API_KEY } }
+    );
+    if (res.ok) {
+      const data = await res.json();
+      const matches = (data.matches || []).map((m) => ({
+        date: m.utcDate?.slice(0, 10),
+        homeTeam: m.homeTeam?.name,
+        awayTeam: m.awayTeam?.name,
+        score: `${m.score?.fullTime?.home ?? "-"}-${m.score?.fullTime?.away ?? "-"}`,
+        winner: m.score?.winner === "HOME_TEAM" ? "HOME" : m.score?.winner === "AWAY_TEAM" ? "AWAY" : "DRAW",
+      }));
+
+      // Calculer le bilan
+      let homeWins = 0, awayWins = 0, draws = 0;
+      matches.forEach((m) => {
+        if (m.winner === "HOME") homeWins++;
+        else if (m.winner === "AWAY") awayWins++;
+        else draws++;
+      });
+
+      const result = { matches, bilan: { homeWins, awayWins, draws, total: matches.length } };
+      cache[cacheKey] = { data: result, timestamp: Date.now() };
+      return result;
+    }
+  } catch (e) {}
+  return null;
+}
+
 async function getTodayMatches(leagueCode) {
   const cacheKey = `matches_${leagueCode}`;
   if (cache[cacheKey] && Date.now() - cache[cacheKey].timestamp < 15 * 60 * 1000) return cache[cacheKey].data;
@@ -123,10 +159,14 @@ ${matchInfo.statsHome ? `STATS ${matchInfo.homeTeam} : ${matchInfo.statsHome.pos
 
 ${matchInfo.statsAway ? `STATS ${matchInfo.awayTeam} : ${matchInfo.statsAway.position || "?"}e (${matchInfo.statsAway.points || 0} pts), ${matchInfo.statsAway.won}V/${matchInfo.statsAway.draw}N/${matchInfo.statsAway.lost}D, Buts: ${matchInfo.statsAway.goalsFor}/${matchInfo.statsAway.goalsAgainst} (${matchInfo.statsAway.goalDifference > 0 ? "+" : ""}${matchInfo.statsAway.goalDifference}), Forme: ${matchInfo.statsAway.form}` : `Aucune stat pour ${matchInfo.awayTeam}`}
 
-Choisis le pari le plus SUR et FIABLE selon les stats. Privilegie les paris a haute probabilite (>65%).
+${matchInfo.h2h ? `CONFRONTATIONS DIRECTES (5 derniers matchs) :
+${matchInfo.h2h.matches.map((m) => `- ${m.homeTeam} ${m.score} ${m.awayTeam}`).join("\n")}
+Bilan : ${matchInfo.h2h.bilan.homeWins} victoires domicile, ${matchInfo.h2h.bilan.draws} nuls, ${matchInfo.h2h.bilan.awayWins} victoires exterieur` : "Aucune confrontation directe trouvee"}
+
+Choisis le pari le plus SUR et FIABLE selon les stats ET l'historique des confrontations. Privilegie les paris a haute probabilite (>65%).
 
 JSON UNIQUEMENT :
-{"meilleurPari": "un de la liste exactement", "probabilite": 00, "justification": "courte basee sur les stats", "niveauConfiance": "eleve/moyen/faible"}`;
+{"meilleurPari": "un de la liste exactement", "probabilite": 00, "justification": "courte basee sur stats et H2H", "niveauConfiance": "eleve/moyen/faible"}`;
 
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -187,6 +227,15 @@ app.get("/api/top-matches", async (req, res) => {
   }
 });
 
+// H2H
+let h2h = null;
+if (match.homeTeamId && match.awayTeamId) {
+  h2h = await getH2H(match.homeTeamId, match.awayTeamId);
+}
+
+const analysis = await analyzeMatch({ ...match, statsHome, statsAway, h2h });
+analyses.push({ ...match, ...analysis, statsHome, statsAway, h2h });
+
 app.post("/api/analyze", async (req, res) => {
   try {
     const { equipe1, equipe2, typePari } = req.body;
@@ -233,34 +282,19 @@ ${statsAway ? `STATS ${equipe2} :
 - Moyenne buts marques/match : ${statsAway.playedGames ? (statsAway.goalsFor / statsAway.playedGames).toFixed(1) : "?"}
 - Forme recente (5 matchs) : ${statsAway.form || "N/A"}` : `Aucune statistique pour ${equipe2}`}
 
+${h2h ? `CONFRONTATIONS DIRECTES (5 derniers matchs) :
+${h2h.matches.map((m) => `- ${m.homeTeam} ${m.score} ${m.awayTeam}`).join("\n")}
+Bilan : ${h2h.bilan.homeWins}V domicile - ${h2h.bilan.draws}N - ${h2h.bilan.awayWins}V exterieur` : "Aucune confrontation trouvee"}
+
 CONSIGNES D'ANALYSE :
 - Compare la force des equipes (classement, forme, attaque, defense)
 - Prends en compte l'avantage du domicile pour ${equipe1}
+- Analyse l'historique des confrontations directes
 - Analyse si les equipes marquent/encaissent beaucoup de buts
-- Verifie la coherence du pari "${typePari}" avec les statistiques
-- Si le pari est un combine (ex: victoire/nul + buts), analyse chaque condition separement puis ensemble
+- Verifie la coherence du pari "${typePari}" avec TOUTES les donnees
 
-IMPORTANT : Sois honnete et precis. Base-toi UNIQUEMENT sur les stats fournies. Si les donnees sont insuffisantes, donne une estimation prudente.
-
-Reponds UNIQUEMENT en JSON (pas de texte avant/apres) :
-{"probabilite": 00, "justification": "analyse detaillee basee sur les stats"}`;
-
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify({ model: "claude-sonnet-5", max_tokens: 500, messages: [{ role: "user", content: prompt }] }),
-    });
-
-    const data = await response.json();
-    const text = (data.content || []).map((b) => b.text || "").join("").replace(/```json|```/g, "").trim();
-    const result = JSON.parse(text);
-
-    res.json({ ...result, statsEquipe1: statsHome, statsEquipe2: statsAway, equipesTrouvees1: teams1.length > 0, equipesTrouvees2: teams2.length > 0 });
-  } catch (error) {
-    console.error("Erreur analyse:", error.message);
-    res.status(500).json({ error: error.message });
-  }
-});
+Reponds UNIQUEMENT en JSON :
+{"probabilite": 00, "justification": "analyse detaillee basee sur stats et H2H"}`;
 
 app.post("/api/analyze-simple", async (req, res) => {
   try {
@@ -275,6 +309,8 @@ app.post("/api/analyze-simple", async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+
+res.json({ ...result, statsEquipe1: statsHome, statsEquipe2: statsAway, h2h, equipesTrouvees1: teams1.length > 0, equipesTrouvees2: teams2.length > 0 });
 
 app.listen(3001, () => {
   console.log("Serveur demarre sur http://localhost:3001");
