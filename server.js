@@ -5,8 +5,8 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-const FOOTBALL_API_KEY = process.env.FOOTBALL_API_KEY;
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || "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";
+const FOOTBALL_API_KEY = process.env.FOOTBALL_API_KEY || "ec81bb7e12c7449abe7e57c66defbf78";
 
 const cache = {};
 const CACHE_DURATION = 30 * 60 * 1000;
@@ -81,11 +81,9 @@ async function getTeamStanding(teamId) {
   return null;
 }
 
-// Stats domicile/extérieur
 async function getHomeAwayStats(teamId) {
   const cacheKey = `homeaway_${teamId}`;
   if (cache[cacheKey] && Date.now() - cache[cacheKey].timestamp < CACHE_DURATION) return cache[cacheKey].data;
-
   try {
     const res = await fetch(`https://api.football-data.org/v4/teams/${teamId}/matches?limit=20&status=FINISHED`, {
       headers: { "X-Auth-Token": FOOTBALL_API_KEY },
@@ -94,7 +92,6 @@ async function getHomeAwayStats(teamId) {
       const data = await res.json();
       const matches = data.matches || [];
       
-      // Stats domicile
       const homeMatches = matches.filter((m) => m.homeTeam?.id === teamId);
       let homeWins = 0, homeDraws = 0, homeLosses = 0, homeGoalsFor = 0, homeGoalsAgainst = 0;
       homeMatches.forEach((m) => {
@@ -105,7 +102,6 @@ async function getHomeAwayStats(teamId) {
         else homeDraws++;
       });
 
-      // Stats extérieur
       const awayMatches = matches.filter((m) => m.awayTeam?.id === teamId);
       let awayWins = 0, awayDraws = 0, awayLosses = 0, awayGoalsFor = 0, awayGoalsAgainst = 0;
       awayMatches.forEach((m) => {
@@ -121,13 +117,11 @@ async function getHomeAwayStats(teamId) {
           played: homeMatches.length, won: homeWins, draw: homeDraws, lost: homeLosses,
           goalsFor: homeGoalsFor, goalsAgainst: homeGoalsAgainst,
           avgGoalsFor: homeMatches.length > 0 ? (homeGoalsFor / homeMatches.length).toFixed(1) : 0,
-          avgGoalsAgainst: homeMatches.length > 0 ? (homeGoalsAgainst / homeMatches.length).toFixed(1) : 0,
         },
         away: {
           played: awayMatches.length, won: awayWins, draw: awayDraws, lost: awayLosses,
           goalsFor: awayGoalsFor, goalsAgainst: awayGoalsAgainst,
           avgGoalsFor: awayMatches.length > 0 ? (awayGoalsFor / awayMatches.length).toFixed(1) : 0,
-          avgGoalsAgainst: awayMatches.length > 0 ? (awayGoalsAgainst / awayMatches.length).toFixed(1) : 0,
         },
       };
       cache[cacheKey] = { data: result, timestamp: Date.now() };
@@ -211,7 +205,7 @@ async function analyzeMatch(matchInfo) {
     ? "STATS " + matchInfo.awayTeam + ": " + (matchInfo.statsAway.position || "?") + "e, " + matchInfo.statsAway.won + "V/" + matchInfo.statsAway.draw + "N/" + matchInfo.statsAway.lost + "D, Buts: " + matchInfo.statsAway.goalsFor + "/" + matchInfo.statsAway.goalsAgainst + ", Forme: " + matchInfo.statsAway.form
     : "Pas de stats pour " + matchInfo.awayTeam;
 
-  const prompt = "Analyse ce match de football. " + homeText + ". " + awayText + ". " + h2hText + " Match: " + matchInfo.homeTeam + " (domicile) vs " + matchInfo.awayTeam + " (exterieur). Championnat: " + (matchInfo.competition || "Inconnu") + ". Choisis le meilleur pari parmi: Victoire domicile, Victoire exterieur, Match nul, Victoire ou nul domicile, Victoire ou nul exterieur, Plus de 2.5 buts, Moins de 2.5 buts, Total buts 1.5 plus, Equipe domicile 0.5 buts plus, Equipe exterieur 0.5 buts plus, Victoire/nul domicile + 0.5 buts plus, Victoire/nul exterieur + 0.5 buts plus, Victoire/nul domicile + 1.5 buts plus, Victoire/nul exterieur + 1.5 buts plus, Les deux equipes marquent. Reponds UNIQUEMENT avec ce JSON: {\"meilleurPari\":\"...\",\"probabilite\":00,\"justification\":\"...\",\"niveauConfiance\":\"eleve/moyen/faible\"}";
+  const prompt = "Analyse ce match. " + homeText + ". " + awayText + ". " + h2hText + " Match: " + matchInfo.homeTeam + " (domicile) vs " + matchInfo.awayTeam + " (exterieur). Choisis le meilleur pari parmi: Victoire domicile, Victoire exterieur, Match nul, Victoire ou nul domicile, Victoire ou nul exterieur, Plus de 2.5 buts, Moins de 2.5 buts, Total buts 1.5 plus, Equipe domicile 0.5 buts plus, Equipe exterieur 0.5 buts plus, Victoire/nul domicile + 0.5 buts plus, Victoire/nul exterieur + 0.5 buts plus, Victoire/nul domicile + 1.5 buts plus, Victoire/nul exterieur + 1.5 buts plus, Les deux equipes marquent. JSON: {\"meilleurPari\":\"...\",\"probabilite\":00,\"justification\":\"...\",\"niveauConfiance\":\"eleve/moyen/faible\"}";
 
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -308,7 +302,6 @@ app.post("/api/analyze", async (req, res) => {
       h2h = await getH2H(teams1[0].id, teams2[0].id);
     }
 
-    // Texte H2H
     let h2hText = "";
     if (h2h && h2h.matches && h2h.matches.length > 0) {
       h2hText = "H2H: ";
@@ -316,13 +309,12 @@ app.post("/api/analyze", async (req, res) => {
       h2hText += "Bilan: " + h2h.bilan.homeWins + "V dom - " + h2h.bilan.draws + "N - " + h2h.bilan.awayWins + "V ext.";
     }
 
-    // Texte stats domicile/extérieur
     let ha1Text = "", ha2Text = "";
     if (homeAway1) {
-      ha1Text = equipe1 + " A DOMICILE cette saison: " + homeAway1.home.won + "V/" + homeAway1.home.draw + "N/" + homeAway1.home.lost + "D, Buts: " + homeAway1.home.goalsFor + "/" + homeAway1.home.goalsAgainst + " (moy " + homeAway1.home.avgGoalsFor + "/match). ";
+      ha1Text = equipe1 + " A DOMICILE: " + homeAway1.home.won + "V/" + homeAway1.home.draw + "N/" + homeAway1.home.lost + "D, Buts: " + homeAway1.home.goalsFor + "/" + homeAway1.home.goalsAgainst + ". ";
     }
     if (homeAway2) {
-      ha2Text = equipe2 + " A L'EXTERIEUR cette saison: " + homeAway2.away.won + "V/" + homeAway2.away.draw + "N/" + homeAway2.away.lost + "D, Buts: " + homeAway2.away.goalsFor + "/" + homeAway2.away.goalsAgainst + " (moy " + homeAway2.away.avgGoalsFor + "/match). ";
+      ha2Text = equipe2 + " A L'EXTERIEUR: " + homeAway2.away.won + "V/" + homeAway2.away.draw + "N/" + homeAway2.away.lost + "D, Buts: " + homeAway2.away.goalsFor + "/" + homeAway2.away.goalsAgainst + ". ";
     }
 
     let homeText = statsHome 
@@ -333,7 +325,7 @@ app.post("/api/analyze", async (req, res) => {
       ? "STATS " + equipe2 + ": " + (statsAway.position || "?") + "e, " + statsAway.won + "V/" + statsAway.draw + "N/" + statsAway.lost + "D, Buts: " + statsAway.goalsFor + "/" + statsAway.goalsAgainst + ", Forme: " + statsAway.form
       : "Pas de stats pour " + equipe2;
 
-    const prompt = "Analyse ce match de football en profondeur. " + homeText + ". " + awayText + ". " + ha1Text + ha2Text + h2hText + " Match: " + equipe1 + " (DOMICILE) vs " + equipe2 + " (EXTERIEUR). Pari a evaluer: " + typePari + ". IMPORTANT: Tiens compte des stats domicile de " + equipe1 + " et des stats exterieur de " + equipe2 + ". Donne la probabilite (0-100) que ce pari se realise. Reponds UNIQUEMENT avec ce JSON: {\"probabilite\": 00, \"justification\": \"phrase courte\"}";
+    const prompt = "Analyse ce match. " + homeText + ". " + awayText + ". " + ha1Text + ha2Text + h2hText + " Match: " + equipe1 + " (DOMICILE) vs " + equipe2 + " (EXTERIEUR). Pari: " + typePari + ". Donne probabilite (0-100). JSON: {\"probabilite\": 00, \"justification\": \"courte\"}";
 
     console.log("Prompt:", prompt.substring(0, 250));
 
