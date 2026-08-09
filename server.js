@@ -85,7 +85,7 @@ async function getHomeAwayStats(teamId) {
   const cacheKey = `homeaway_${teamId}`;
   if (cache[cacheKey] && Date.now() - cache[cacheKey].timestamp < CACHE_DURATION) return cache[cacheKey].data;
   try {
-    const res = await fetch(`https://api.football-data.org/v4/teams/${teamId}/matches?limit=20&status=FINISHED`, {
+    const res = await fetch(`https://api.football-data.org/v4/teams/${teamId}/matches?limit=60&status=FINISHED`, {
       headers: { "X-Auth-Token": FOOTBALL_API_KEY },
     });
     if (res.ok) {
@@ -136,7 +136,7 @@ async function getH2H(teamId1, teamId2) {
   if (cache[cacheKey] && Date.now() - cache[cacheKey].timestamp < CACHE_DURATION) return cache[cacheKey].data;
   try {
     const res = await fetch(
-      `https://api.football-data.org/v4/teams/${teamId1}/matches?limit=30&status=FINISHED`,
+  `https://api.football-data.org/v4/teams/${teamId1}/matches?limit=60&status=FINISHED`,
       { headers: { "X-Auth-Token": FOOTBALL_API_KEY } }
     );
     if (res.ok) {
