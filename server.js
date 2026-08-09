@@ -17,6 +17,11 @@ const LEAGUES = [
   { code: "SA", name: "Serie A" },
   { code: "BL1", name: "Bundesliga" },
   { code: "FL1", name: "Ligue 1" },
+  { code: "PPL", name: "Liga Portugal" },
+  { code: "DED", name: "Eredivisie" },
+  { code: "BSA", name: "Brasileirao" },
+  { code: "SPL", name: "Scottish Premiership" },
+  { code: "BPL", name: "Jupiler Pro League" },
 ];
 
 async function searchTeam(teamName) {
