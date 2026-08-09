@@ -5,8 +5,8 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || "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";
-const FOOTBALL_API_KEY = process.env.FOOTBALL_API_KEY || "ec81bb7e12c7449abe7e57c66defbf78";
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+const FOOTBALL_API_KEY = process.env.FOOTBALL_API_KEY;
 
 const cache = {};
 const CACHE_DURATION = 30 * 60 * 1000;
