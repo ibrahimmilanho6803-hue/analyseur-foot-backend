@@ -196,21 +196,19 @@ async function analyzeMatch(matchInfo) {
   let h2hText = "";
   if (matchInfo.h2h && matchInfo.h2h.matches && matchInfo.h2h.matches.length > 0) {
     h2hText = "H2H: ";
-    matchInfo.h2h.matches.forEach((m) => {
-      h2hText += m.homeTeam + " " + m.score + " " + m.awayTeam + ", ";
-    });
-    h2hText += "Bilan: " + matchInfo.h2h.bilan.homeWins + "V dom - " + matchInfo.h2h.bilan.draws + "N - " + matchInfo.h2h.bilan.awayWins + "V ext.";
+    matchInfo.h2h.matches.forEach((m) => { h2hText += m.homeTeam + " " + m.score + " " + m.awayTeam + ", "; });
+    h2hText += "Bilan: " + matchInfo.h2h.bilan.homeWins + "V dom - " + matchInfo.h2h.bilan.draws + "N - " + matchInfo.h2h.bilan.awayWins + "V ext. ";
   }
 
-  let homeText = matchInfo.statsHome 
-    ? "STATS " + matchInfo.homeTeam + ": " + (matchInfo.statsHome.position || "?") + "e, " + matchInfo.statsHome.won + "V/" + matchInfo.statsHome.draw + "N/" + matchInfo.statsHome.lost + "D, Buts: " + matchInfo.statsHome.goalsFor + "/" + matchInfo.statsHome.goalsAgainst + ", Forme: " + matchInfo.statsHome.form
-    : "Pas de stats pour " + matchInfo.homeTeam;
+  let ha1Text = "", ha2Text = "";
+  if (matchInfo.homeAway1) {
+    ha1Text = matchInfo.homeTeam + " A DOMICILE: " + matchInfo.homeAway1.home.won + "V/" + matchInfo.homeAway1.home.draw + "N/" + matchInfo.homeAway1.home.lost + "D, Buts: " + matchInfo.homeAway1.home.goalsFor + "/" + matchInfo.homeAway1.home.goalsAgainst + ". ";
+  }
+  if (matchInfo.homeAway2) {
+    ha2Text = matchInfo.awayTeam + " A L'EXTERIEUR: " + matchInfo.homeAway2.away.won + "V/" + matchInfo.homeAway2.away.draw + "N/" + matchInfo.homeAway2.away.lost + "D, Buts: " + matchInfo.homeAway2.away.goalsFor + "/" + matchInfo.homeAway2.away.goalsAgainst + ". ";
+  }
 
-  let awayText = matchInfo.statsAway
-    ? "STATS " + matchInfo.awayTeam + ": " + (matchInfo.statsAway.position || "?") + "e, " + matchInfo.statsAway.won + "V/" + matchInfo.statsAway.draw + "N/" + matchInfo.statsAway.lost + "D, Buts: " + matchInfo.statsAway.goalsFor + "/" + matchInfo.statsAway.goalsAgainst + ", Forme: " + matchInfo.statsAway.form
-    : "Pas de stats pour " + matchInfo.awayTeam;
-
-  const prompt = "Analyse ce match. " + homeText + ". " + awayText + ". " + h2hText + " Match: " + matchInfo.homeTeam + " (domicile) vs " + matchInfo.awayTeam + " (exterieur). Choisis le meilleur pari parmi: Victoire domicile, Victoire exterieur, Match nul, Victoire ou nul domicile, Victoire ou nul exterieur, Plus de 2.5 buts, Moins de 2.5 buts, Total buts 1.5 plus, Equipe domicile 0.5 buts plus, Equipe exterieur 0.5 buts plus, Victoire/nul domicile + 0.5 buts plus, Victoire/nul exterieur + 0.5 buts plus, Victoire/nul domicile + 1.5 buts plus, Victoire/nul exterieur + 1.5 buts plus, Les deux equipes marquent. JSON: {\"meilleurPari\":\"...\",\"probabilite\":00,\"justification\":\"...\",\"niveauConfiance\":\"eleve/moyen/faible\"}";
+  const prompt = "Analyse ce match. " + ha1Text + ha2Text + h2hText + " Match: " + matchInfo.homeTeam + " (domicile) vs " + matchInfo.awayTeam + " (exterieur). Championnat: " + (matchInfo.competition || "Inconnu") + ". Choisis le meilleur pari avec une probabilite d'au moins 55%. Reponds JSON: {\"meilleurPari\":\"...\",\"probabilite\":00,\"justification\":\"...\",\"niveauConfiance\":\"eleve/moyen/faible\"}";
 
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -224,130 +222,103 @@ async function analyzeMatch(matchInfo) {
 
 app.get("/api/top-matches", async (req, res) => {
   try {
-    console.log("Recherche des matchs du jour...");
-    let allMatches = [];
-    for (const league of LEAGUES) {
+    console.log("Recherche des matchs dans PL, Liga, Bundesliga...");
+    
+    const selectedLeagues = [
+      { code: "PL", name: "Premier League" },
+      { code: "PD", name: "Liga" },
+      { code: "BL1", name: "Bundesliga" },
+    ];
+
+    let allAnalyses = [];
+
+    for (const league of selectedLeagues) {
       const matches = await getTodayMatches(league.code);
-      const matchList = matches.slice(0, 5).map((m) => ({
-        id: m.id, homeTeam: m.homeTeam?.name || "Inconnu", awayTeam: m.awayTeam?.name || "Inconnu",
-        homeTeamId: m.homeTeam?.id, awayTeamId: m.awayTeam?.id, date: m.utcDate, competition: league.name,
-      }));
-      allMatches = [...allMatches, ...matchList];
-    }
-    console.log(allMatches.length + " matchs trouves");
-    const analyses = [];
-    for (const match of allMatches.slice(0, 15)) {
-      try {
-        let statsHome = null, statsAway = null, h2h = null;
-        if (match.homeTeamId) {
-          const standing = await getTeamStanding(match.homeTeamId);
-          const form = await getTeamForm(match.homeTeamId);
-          const lastResults = form?.matches?.slice(0, 5).map((m2) =>
-            m2.homeTeam?.id === match.homeTeamId
-              ? (m2.score?.winner === "HOME_TEAM" ? "V" : m2.score?.winner === "AWAY_TEAM" ? "D" : "N")
-              : (m2.score?.winner === "AWAY_TEAM" ? "V" : m2.score?.winner === "HOME_TEAM" ? "D" : "N")
-          ).join("") || "N/A";
-          statsHome = { ...standing, form: lastResults };
+      console.log(`${league.name}: ${matches.length} matchs trouves`);
+
+      const analyses = [];
+      for (const match of matches.slice(0, 6)) {
+        try {
+          let statsHome = null, statsAway = null, h2h = null, homeAway1 = null, homeAway2 = null;
+
+          if (match.homeTeam?.id) {
+            const standing = await getTeamStanding(match.homeTeam.id);
+            const form = await getTeamForm(match.homeTeam.id);
+            const lastResults = form?.matches?.slice(0, 5).map((m2) =>
+              m2.homeTeam?.id === match.homeTeam.id
+                ? (m2.score?.winner === "HOME_TEAM" ? "V" : m2.score?.winner === "AWAY_TEAM" ? "D" : "N")
+                : (m2.score?.winner === "AWAY_TEAM" ? "V" : m2.score?.winner === "HOME_TEAM" ? "D" : "N")
+            ).join("") || "N/A";
+            statsHome = { ...standing, form: lastResults };
+            homeAway1 = await getHomeAwayStats(match.homeTeam.id);
+          }
+
+          if (match.awayTeam?.id) {
+            const standing = await getTeamStanding(match.awayTeam.id);
+            const form = await getTeamForm(match.awayTeam.id);
+            const lastResults = form?.matches?.slice(0, 5).map((m2) =>
+              m2.homeTeam?.id === match.awayTeam.id
+                ? (m2.score?.winner === "HOME_TEAM" ? "V" : m2.score?.winner === "AWAY_TEAM" ? "D" : "N")
+                : (m2.score?.winner === "AWAY_TEAM" ? "V" : m2.score?.winner === "HOME_TEAM" ? "D" : "N")
+            ).join("") || "N/A";
+            statsAway = { ...standing, form: lastResults };
+            homeAway2 = await getHomeAwayStats(match.awayTeam.id);
+          }
+
+          if (match.homeTeam?.id && match.awayTeam?.id) {
+            h2h = await getH2H(match.homeTeam.id, match.awayTeam.id);
+          }
+
+          const analysis = await analyzeMatch({
+            homeTeam: match.homeTeam?.name || "Inconnu",
+            awayTeam: match.awayTeam?.name || "Inconnu",
+            competition: league.name,
+            statsHome,
+            statsAway,
+            h2h,
+            homeAway1,
+            homeAway2,
+          });
+
+          analyses.push({
+            homeTeam: match.homeTeam?.name || "Inconnu",
+            awayTeam: match.awayTeam?.name || "Inconnu",
+            competition: league.name,
+            date: match.utcDate,
+            ...analysis,
+            statsHome,
+            statsAway,
+            h2h,
+            homeAway1,
+            homeAway2,
+          });
+        } catch (e) {
+          console.log(`Erreur analyse: ${e.message}`);
         }
-        if (match.awayTeamId) {
-          const standing = await getTeamStanding(match.awayTeamId);
-          const form = await getTeamForm(match.awayTeamId);
-          const lastResults = form?.matches?.slice(0, 5).map((m2) =>
-            m2.homeTeam?.id === match.awayTeamId
-              ? (m2.score?.winner === "HOME_TEAM" ? "V" : m2.score?.winner === "AWAY_TEAM" ? "D" : "N")
-              : (m2.score?.winner === "AWAY_TEAM" ? "V" : m2.score?.winner === "HOME_TEAM" ? "D" : "N")
-          ).join("") || "N/A";
-          statsAway = { ...standing, form: lastResults };
-        }
-        if (match.homeTeamId && match.awayTeamId) {
-          h2h = await getH2H(match.homeTeamId, match.awayTeamId);
-        }
-        const analysis = await analyzeMatch({ ...match, statsHome, statsAway, h2h });
-        analyses.push({ ...match, ...analysis, statsHome, statsAway, h2h });
-      } catch (e) {
-        console.log("Erreur analyse " + match.homeTeam + " vs " + match.awayTeam + ": " + e.message);
+      }
+
+      // Sélectionner le match avec probabilité entre 50% et 70%
+      // pour garantir une cote totale de 2.5+
+      const best = analyses
+        .filter((a) => a.probabilite >= 50 && a.probabilite <= 70)
+        .sort((a, b) => a.probabilite - b.probabilite)[0] 
+        || analyses.sort((a, b) => b.probabilite - a.probabilite)[0];
+
+      if (best) {
+        best.coteImplicite = (1 / (best.probabilite / 100)).toFixed(2);
+        allAnalyses.push(best);
       }
     }
-    const sorted = analyses.filter((a) => a.probabilite >= 60 && a.niveauConfiance !== "faible").sort((a, b) => b.probabilite - a.probabilite).slice(0, 3);
-    res.json({ topMatches: sorted, totalAnalyse: analyses.length });
+
+    // Calculer la cote totale
+    let coteTotale = 1;
+    allAnalyses.forEach((a) => { coteTotale *= parseFloat(a.coteImplicite); });
+    coteTotale = coteTotale.toFixed(2);
+
+    console.log(`${allAnalyses.length} matchs selectionnes (1 par championnat) - Cote totale: ${coteTotale}`);
+
+    res.json({ topMatches: allAnalyses, coteTotale });
   } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post("/api/analyze", async (req, res) => {
-  try {
-    const { equipe1, equipe2, typePari } = req.body;
-    let statsHome = null, statsAway = null, h2h = null, homeAway1 = null, homeAway2 = null;
-    const [teams1, teams2] = await Promise.all([searchTeam(equipe1), searchTeam(equipe2)]);
-
-    if (teams1.length > 0) {
-      const standing = await getTeamStanding(teams1[0].id);
-      const form = await getTeamForm(teams1[0].id);
-      const lastResults = form?.matches?.slice(0, 5).map((m) =>
-        m.homeTeam?.id === teams1[0].id
-          ? (m.score?.winner === "HOME_TEAM" ? "V" : m.score?.winner === "AWAY_TEAM" ? "D" : "N")
-          : (m.score?.winner === "AWAY_TEAM" ? "V" : m.score?.winner === "HOME_TEAM" ? "D" : "N")
-      ).join("") || "N/A";
-      statsHome = { ...standing, form: lastResults };
-      homeAway1 = await getHomeAwayStats(teams1[0].id);
-    }
-    if (teams2.length > 0) {
-      const standing = await getTeamStanding(teams2[0].id);
-      const form = await getTeamForm(teams2[0].id);
-      const lastResults = form?.matches?.slice(0, 5).map((m) =>
-        m.homeTeam?.id === teams2[0].id
-          ? (m.score?.winner === "HOME_TEAM" ? "V" : m.score?.winner === "AWAY_TEAM" ? "D" : "N")
-          : (m.score?.winner === "AWAY_TEAM" ? "V" : m.score?.winner === "HOME_TEAM" ? "D" : "N")
-      ).join("") || "N/A";
-      statsAway = { ...standing, form: lastResults };
-      homeAway2 = await getHomeAwayStats(teams2[0].id);
-    }
-    if (teams1.length > 0 && teams2.length > 0) {
-      h2h = await getH2H(teams1[0].id, teams2[0].id);
-    }
-
-    let h2hText = "";
-    if (h2h && h2h.matches && h2h.matches.length > 0) {
-      h2hText = "H2H: ";
-      h2h.matches.forEach((m) => { h2hText += m.homeTeam + " " + m.score + " " + m.awayTeam + ", "; });
-      h2hText += "Bilan: " + h2h.bilan.homeWins + "V dom - " + h2h.bilan.draws + "N - " + h2h.bilan.awayWins + "V ext.";
-    }
-
-    let ha1Text = "", ha2Text = "";
-    if (homeAway1) {
-      ha1Text = equipe1 + " A DOMICILE: " + homeAway1.home.won + "V/" + homeAway1.home.draw + "N/" + homeAway1.home.lost + "D, Buts: " + homeAway1.home.goalsFor + "/" + homeAway1.home.goalsAgainst + ". ";
-    }
-    if (homeAway2) {
-      ha2Text = equipe2 + " A L'EXTERIEUR: " + homeAway2.away.won + "V/" + homeAway2.away.draw + "N/" + homeAway2.away.lost + "D, Buts: " + homeAway2.away.goalsFor + "/" + homeAway2.away.goalsAgainst + ". ";
-    }
-
-    let homeText = statsHome 
-      ? "STATS " + equipe1 + ": " + (statsHome.position || "?") + "e, " + statsHome.won + "V/" + statsHome.draw + "N/" + statsHome.lost + "D, Buts: " + statsHome.goalsFor + "/" + statsHome.goalsAgainst + ", Forme: " + statsHome.form
-      : "Pas de stats pour " + equipe1;
-
-    let awayText = statsAway
-      ? "STATS " + equipe2 + ": " + (statsAway.position || "?") + "e, " + statsAway.won + "V/" + statsAway.draw + "N/" + statsAway.lost + "D, Buts: " + statsAway.goalsFor + "/" + statsAway.goalsAgainst + ", Forme: " + statsAway.form
-      : "Pas de stats pour " + equipe2;
-
-    const prompt = "Analyse ce match. " + homeText + ". " + awayText + ". " + ha1Text + ha2Text + h2hText + " Match: " + equipe1 + " (DOMICILE) vs " + equipe2 + " (EXTERIEUR). Pari: " + typePari + ". Donne probabilite (0-100). JSON: {\"probabilite\": 00, \"justification\": \"courte\"}";
-
-    console.log("Prompt:", prompt.substring(0, 250));
-
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify({ model: "claude-sonnet-5", max_tokens: 500, messages: [{ role: "user", content: prompt }] }),
-    });
-
-    const data = await response.json();
-    const text = (data.content || []).map((b) => b.text || "").join("").replace(/```json|```/g, "").trim();
-    console.log("Texte:", text);
-    
-    const result = JSON.parse(text);
-    res.json({ ...result, statsEquipe1: statsHome, statsEquipe2: statsAway, h2h, homeAway1, homeAway2, equipesTrouvees1: teams1.length > 0, equipesTrouvees2: teams2.length > 0 });
-  } catch (error) {
-    console.error("Erreur:", error.message);
     res.status(500).json({ error: error.message });
   }
 });
