@@ -177,7 +177,7 @@ async function getTodayMatches(leagueCode) {
   const cacheKey = `matches_${leagueCode}`;
   if (cache[cacheKey] && Date.now() - cache[cacheKey].timestamp < 15 * 60 * 1000) return cache[cacheKey].data;
   const today = new Date().toISOString().slice(0, 10);
-  const nextWeek = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const nextWeek = new Date(Date.now() + 21 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   try {
     const res = await fetch(
       `https://api.football-data.org/v4/competitions/${leagueCode}/matches?dateFrom=${today}&dateTo=${nextWeek}&status=SCHEDULED`,
