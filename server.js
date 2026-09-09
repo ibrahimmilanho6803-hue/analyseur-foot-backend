@@ -222,7 +222,7 @@ async function analyzeMatch(matchInfo) {
 
 app.get("/api/top-matches", async (req, res) => {
   try {
-    console.log("Recherche des matchs dans PL, Liga, Bundesliga...");
+    console.log("Recherche des matchs...");
     
     const selectedLeagues = [
       { code: "PL", name: "Premier League" },
@@ -234,10 +234,10 @@ app.get("/api/top-matches", async (req, res) => {
 
     for (const league of selectedLeagues) {
       const matches = await getTodayMatches(league.code);
-      console.log(`${league.name}: ${matches.length} matchs trouves`);
+      console.log(`${league.name}: ${matches.length} matchs`);
 
       const analyses = [];
-      for (const match of matches.slice(0, 6)) {
+      for (const match of matches.slice(0, 8)) {
         try {
           let statsHome = null, statsAway = null, h2h = null, homeAway1 = null, homeAway2 = null;
 
@@ -293,16 +293,18 @@ app.get("/api/top-matches", async (req, res) => {
             homeAway2,
           });
         } catch (e) {
-          console.log(`Erreur analyse: ${e.message}`);
+          console.log(`Erreur: ${e.message}`);
         }
       }
 
-      // Sélectionner le match avec probabilité entre 50% et 70%
-      // pour garantir une cote totale de 2.5+
-      const best = analyses
-        .filter((a) => a.probabilite >= 50 && a.probabilite <= 70)
-        .sort((a, b) => a.probabilite - b.probabilite)[0] 
-        || analyses.sort((a, b) => b.probabilite - a.probabilite)[0];
+      // Sélectionner avec probabilité entre 55% et 65% pour une cote de ~1.6-1.8 par match
+      // 3 matchs à 1.6-1.8 = cote totale de ~2.5-4
+      let best = analyses.filter((a) => a.probabilite >= 55 && a.probabilite <= 65)[0];
+      
+      // Si pas dans cette fourchette, prendre le plus proche de 60%
+      if (!best) {
+        best = analyses.sort((a, b) => Math.abs(a.probabilite - 60) - Math.abs(b.probabilite - 60))[0];
+      }
 
       if (best) {
         best.coteImplicite = (1 / (best.probabilite / 100)).toFixed(2);
@@ -310,12 +312,73 @@ app.get("/api/top-matches", async (req, res) => {
       }
     }
 
+    // Si moins de 3 matchs, compléter avec d'autres championnats
+    if (allAnalyses.length < 3) {
+      const extraLeagues = [
+        { code: "SA", name: "Serie A" },
+        { code: "FL1", name: "Ligue 1" },
+      ];
+      for (const league of extraLeagues) {
+        if (allAnalyses.length >= 3) break;
+        const matches = await getTodayMatches(league.code);
+        for (const match of matches.slice(0, 5)) {
+          if (allAnalyses.length >= 3) break;
+          try {
+            let statsHome = null, statsAway = null, h2h = null, homeAway1 = null, homeAway2 = null;
+            if (match.homeTeam?.id) {
+              const standing = await getTeamStanding(match.homeTeam.id);
+              const form = await getTeamForm(match.homeTeam.id);
+              const lastResults = form?.matches?.slice(0, 5).map((m2) =>
+                m2.homeTeam?.id === match.homeTeam.id
+                  ? (m2.score?.winner === "HOME_TEAM" ? "V" : m2.score?.winner === "AWAY_TEAM" ? "D" : "N")
+                  : (m2.score?.winner === "AWAY_TEAM" ? "V" : m2.score?.winner === "HOME_TEAM" ? "D" : "N")
+              ).join("") || "N/A";
+              statsHome = { ...standing, form: lastResults };
+              homeAway1 = await getHomeAwayStats(match.homeTeam.id);
+            }
+            if (match.awayTeam?.id) {
+              const standing = await getTeamStanding(match.awayTeam.id);
+              const form = await getTeamForm(match.awayTeam.id);
+              const lastResults = form?.matches?.slice(0, 5).map((m2) =>
+                m2.homeTeam?.id === match.awayTeam.id
+                  ? (m2.score?.winner === "HOME_TEAM" ? "V" : m2.score?.winner === "AWAY_TEAM" ? "D" : "N")
+                  : (m2.score?.winner === "AWAY_TEAM" ? "V" : m2.score?.winner === "HOME_TEAM" ? "D" : "N")
+              ).join("") || "N/A";
+              statsAway = { ...standing, form: lastResults };
+              homeAway2 = await getHomeAwayStats(match.awayTeam.id);
+            }
+            if (match.homeTeam?.id && match.awayTeam?.id) {
+              h2h = await getH2H(match.homeTeam.id, match.awayTeam.id);
+            }
+            const analysis = await analyzeMatch({
+              homeTeam: match.homeTeam?.name || "Inconnu",
+              awayTeam: match.awayTeam?.name || "Inconnu",
+              competition: league.name,
+              statsHome, statsAway, h2h, homeAway1, homeAway2,
+            });
+            const item = {
+              homeTeam: match.homeTeam?.name || "Inconnu",
+              awayTeam: match.awayTeam?.name || "Inconnu",
+              competition: league.name,
+              date: match.utcDate,
+              ...analysis,
+              statsHome, statsAway, h2h, homeAway1, homeAway2,
+            };
+            if (item.probabilite >= 50 && item.probabilite <= 70) {
+              item.coteImplicite = (1 / (item.probabilite / 100)).toFixed(2);
+              allAnalyses.push(item);
+            }
+          } catch (e) {}
+        }
+      }
+    }
+
     // Calculer la cote totale
     let coteTotale = 1;
-    allAnalyses.forEach((a) => { coteTotale *= parseFloat(a.coteImplicite); });
+    allAnalyses.forEach((a) => { coteTotale *= parseFloat(a.coteImplicite || 1.7); });
     coteTotale = coteTotale.toFixed(2);
 
-    console.log(`${allAnalyses.length} matchs selectionnes (1 par championnat) - Cote totale: ${coteTotale}`);
+    console.log(`${allAnalyses.length} matchs - Cote totale: ${coteTotale}`);
 
     res.json({ topMatches: allAnalyses, coteTotale });
   } catch (error) {
