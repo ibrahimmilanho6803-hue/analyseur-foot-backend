@@ -73,7 +73,21 @@ async function analyzeMatch(matchInfo) {
     formText += matchInfo.awayTeam + " forme recente: " + matchInfo.formAway + ". ";
   }
 
-  const prompt = "Analyse ce match de football. " + formText + " Match: " + matchInfo.homeTeam + " (domicile) vs " + matchInfo.awayTeam + " (exterieur). Championnat: " + (matchInfo.competition || "Inconnu") + ". Choisis le meilleur pari avec probabilite entre 55% et 65%. Reponds JSON: {\"meilleurPari\":\"...\",\"probabilite\":00,\"justification\":\"...\",\"niveauConfiance\":\"eleve/moyen/faible\"}";
+  const TYPES_PARIS = [
+  "Victoire equipe 1", "Victoire equipe 2", "Match nul",
+  "Victoire ou nul equipe 1", "Victoire ou nul equipe 2",
+  "Plus de 0.5 buts", "Plus de 1.5 buts", "Plus de 2.5 buts", "Plus de 3.5 buts",
+  "Moins de 0.5 but", "Moins de 1.5 but", "Moins de 2.5 buts", "Moins de 3.5 buts",
+  "Les deux equipes marquent - Oui", "Les deux equipes marquent - Non",
+  "Equipe 1 plus de 0.5 but", "Equipe 1 plus de 1.5 buts", "Equipe 1 plus de 2.5 buts",
+  "Equipe 2 plus de 0.5 but", "Equipe 2 plus de 1.5 buts", "Equipe 2 plus de 2.5 buts",
+  "V1 et plus de 1.5 buts", "V1 et plus de 2.5 buts",
+  "1X et plus de 1.5 buts", "1X et plus de 2.5 buts",
+  "V2 et plus de 1.5 buts", "V2 et plus de 2.5 buts",
+  "2X et plus de 1.5 buts", "2X et plus de 2.5 buts",
+];
+
+const prompt = "Analyse ce match de football. " + formText + " Match: " + matchInfo.homeTeam + " (domicile) vs " + matchInfo.awayTeam + " (exterieur). Championnat: " + (matchInfo.competition || "Inconnu") + ". Choisis le meilleur pari EXACTEMENT parmi cette liste: " + TYPES_PARIS.join(", ") + ". La probabilite doit etre entre 55% et 65%. Reponds JSON: {\"meilleurPari\":\"exactement un de la liste\",\"probabilite\":00,\"justification\":\"courte\",\"niveauConfiance\":\"eleve/moyen/faible\"}";
 
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
