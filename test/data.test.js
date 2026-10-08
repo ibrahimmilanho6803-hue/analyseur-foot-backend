@@ -237,3 +237,116 @@ test("changer les réglages du modèle recalcule les forces d'équipes sans re-t
   assert.equal(p.calls.length, calls, "les matchs déjà téléchargés sont réutilisés");
   assert.deepEqual(svc.getModelParams(), { halfLifeDays: 40, priorMatches: 60 });
 });
+
+// ---- Noms alternatifs des clubs ----
+
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Source de test qui sait aussi lister les noms alternatifs : `names` = { idÉquipe: [noms…] }.
+function providerWithNames(names, { fetchTeams, keys = ["PL"] } = {}) {
+  const { cur, prev } = fixtureSeasons();
+  const p = fakeProvider("fake", (l, year) => ({ matches: year === 2026 ? cur : prev, limited: false }), { keys });
+  p.teamCalls = [];
+  p.fetchTeams =
+    fetchTeams ||
+    (async (league) => {
+      p.teamCalls.push(league.key);
+      return Object.entries(names).map(([id, aliases]) => ({ id, name: `Equipe ${id}`, aliases }));
+    });
+  return p;
+}
+
+test("noms alternatifs : ils sont ajoutés aux équipes et comptés dans le status", async () => {
+  const p = providerWithNames({ T0: ["Les Gunners", "GFC"], T3: ["Les Blues"], INCONNU: ["Personne"] });
+  const svc = service([p]);
+  const data = await svc.getLeagueData("PL");
+  assert.deepEqual(data.teams.get("T0").aliases, ["Les Gunners", "GFC"]);
+  assert.deepEqual(data.teams.get("T3").aliases, ["Les Blues"]);
+  assert.deepEqual(data.teams.get("T1").aliases, [], "une équipe sans nom alternatif garde une liste vide");
+  assert.equal(data.teams.size, 12, "un identifiant inconnu de la source de matchs n'ajoute aucune équipe");
+  const pl = svc.status().championnats.find((c) => c.key === "PL");
+  assert.equal(pl.equipes, 12);
+  assert.equal(pl.equipesAvecNomsAlternatifs, 2);
+});
+
+test("noms alternatifs : un seul appel par championnat, même quand les forces d'équipes sont recalculées", async () => {
+  const p = providerWithNames({ T0: ["Les Gunners"] });
+  const svc = service([p]);
+  await svc.getLeagueData("PL");
+  svc.setModelParams({ halfLifeDays: 40, priorMatches: 60 });
+  const again = await svc.getLeagueData("PL");
+  assert.deepEqual(p.teamCalls, ["PL"]);
+  assert.deepEqual(again.teams.get("T0").aliases, ["Les Gunners"], "les noms déjà reçus sont réutilisés");
+});
+
+test("noms alternatifs : une source qui n'en fournit pas, ou qui échoue, ne gêne jamais le chargement des matchs", async () => {
+  const { cur, prev } = fixtureSeasons();
+  const plain = fakeProvider("plain", (l, year) => ({ matches: year === 2026 ? cur : prev, limited: false }));
+  const none = await service([plain]).getLeagueData("PL");
+  assert.equal(none.teams.size, 12);
+  assert.deepEqual(none.teams.get("T0").aliases, []);
+
+  const failing = providerWithNames({}, {
+    fetchTeams: async () => {
+      throw Object.assign(new Error("HTTP 429"), { status: 429 });
+    },
+  });
+  const svc = service([failing]);
+  const data = await svc.getLeagueData("PL");
+  assert.equal(data.teams.size, 12);
+  assert.ok(data.fit.nMatches > 200);
+  assert.equal(data.errors.length, 0, "pas d'alerte pour une information facultative");
+  const pl = svc.status().championnats.find((c) => c.key === "PL");
+  assert.equal(pl.etat, "pret");
+  assert.equal(pl.equipesAvecNomsAlternatifs, 0);
+});
+
+test("noms alternatifs : un échec ou une réponse vide est redemandé au bout d'une heure, pas à chaque recalcul", async () => {
+  const clock = { t: NOW };
+  const answers = [[], [{ id: "T0", name: "Equipe T0", aliases: ["Les Gunners"] }]];
+  let calls = 0;
+  const p = providerWithNames({}, { fetchTeams: async () => answers[Math.min(calls++, answers.length - 1)] });
+  const svc = createDataService({ config, http: null, cache: new SwrCache({ now: () => clock.t }), now: () => clock.t, log: quiet, providers: [p] });
+
+  const first = await svc.getLeagueData("PL");
+  assert.deepEqual(first.teams.get("T0").aliases, [], "réponse vide : aucun nom");
+  svc.setModelParams({ halfLifeDays: 40, priorMatches: 60 });
+  await svc.getLeagueData("PL");
+  assert.equal(calls, 1, "pas de nouvel appel tout de suite");
+
+  clock.t += 61 * 60000;
+  svc.setModelParams({ halfLifeDays: 41, priorMatches: 60 });
+  const later = await svc.getLeagueData("PL");
+  assert.equal(calls, 2, "nouvel essai après une heure");
+  assert.deepEqual(later.teams.get("T0").aliases, ["Les Gunners"]);
+});
+
+test("noms alternatifs : un appel trop lent ne retarde pas les matchs, les noms arrivent ensuite", async () => {
+  let release;
+  const gate = new Promise((resolve) => (release = resolve));
+  const p = providerWithNames({}, { fetchTeams: async () => (await gate, [{ id: "T0", name: "Equipe T0", aliases: ["Les Gunners"] }]) });
+  const slowConfig = loadConfig({ FOOTBALL_DATA_API_KEY: "x" });
+  slowConfig.cache.namesWaitMs = 30;
+  const svc = createDataService({ config: slowConfig, http: null, cache: new SwrCache({ now: () => NOW }), now: () => NOW, log: quiet, providers: [p] });
+
+  const started = Date.now();
+  const data = await svc.getLeagueData("PL");
+  assert.ok(Date.now() - started < 1500, "le chargement n'attend pas la liste des noms");
+  assert.equal(data.teams.size, 12);
+  assert.deepEqual(data.teams.get("T0").aliases, []);
+
+  release();
+  await wait(30);
+  assert.deepEqual(data.teams.get("T0").aliases, ["Les Gunners"], "les noms s'ajoutent aux mêmes équipes dès qu'ils sont reçus");
+  assert.equal(svc.status().championnats.find((c) => c.key === "PL").equipesAvecNomsAlternatifs, 1);
+});
+
+test("noms alternatifs : un appel qui ne répond jamais ne bloque pas non plus", async () => {
+  const p = providerWithNames({}, { fetchTeams: () => new Promise(() => {}) });
+  const slowConfig = loadConfig({ FOOTBALL_DATA_API_KEY: "x" });
+  slowConfig.cache.namesWaitMs = 30;
+  const svc = createDataService({ config: slowConfig, http: null, cache: new SwrCache({ now: () => NOW }), now: () => NOW, log: quiet, providers: [p] });
+  const data = await svc.getLeagueData("PL");
+  assert.equal(data.teams.size, 12);
+  assert.ok(data.fit.nMatches > 200);
+});

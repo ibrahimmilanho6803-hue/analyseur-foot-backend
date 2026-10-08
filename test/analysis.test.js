@@ -187,3 +187,44 @@ test("la confiance baisse avec peu de données ou si l'IA est réservée, jamais
   assert.equal(confidence({ level: 2 }, 0.7, "moyen"), "moyen");
   assert.equal(confidence({ level: 1 }, 0.7, "eleve"), "moyen");
 });
+
+test("un nom alternatif fourni par la source de données suffit à reconnaître le club", async () => {
+  const aliases = { "PL:0": ["The Gunners"], "PL:1": ["The Blues"], "PD:1": ["Blaugrana"] };
+  const withNames = buildWorld({ aliases });
+  const [r] = await withNames.analysis.analyzeLegs([leg("The Gunners", "The Blues", "Victoire ou nul domicile")]);
+  assert.equal(r.etat, "ok");
+  assert.equal(r.equipe1, "Arsenal FC");
+  assert.equal(r.equipe2, "Chelsea FC");
+
+  // Sans ces noms, la même saisie n'est pas reconnue : la source de données fait bien la différence.
+  const without = buildWorld();
+  const [miss] = await without.analysis.analyzeLegs([leg("The Gunners", "The Blues", "Victoire ou nul domicile")]);
+  assert.equal(miss.etat, "equipe_inconnue");
+});
+
+test("un nom alternatif commun à deux clubs du même championnat demande de préciser, il ne choisit pas au hasard", async () => {
+  const w = buildWorld({ aliases: { "PL:0": ["Les Rouges"], "PL:2": ["Les Rouges"] } });
+  const [r] = await w.analysis.analyzeLegs([leg("Les Rouges", "Chelsea", "Victoire ou nul domicile")]);
+  assert.equal(r.etat, "ambigu");
+  assert.deepEqual([...r.suggestions.equipe1].sort(), ["Arsenal FC", "Liverpool FC"]);
+});
+
+test("les noms courants des grands clubs sont reconnus sans aucun nom alternatif de la source", async () => {
+  const w = buildWorld();
+  const legs = [
+    leg("Man City", "Man Utd", "Victoire ou nul domicile"),
+    leg("Spurs", "Brighton", "Victoire ou nul domicile"),
+    leg("Inter", "Milan", "Victoire ou nul domicile"),
+    leg("Barça", "Atleti", "Victoire ou nul domicile"),
+  ];
+  const out = await w.analysis.analyzeLegs(legs);
+  assert.deepEqual(
+    out.map((r) => [r.etat, r.equipe1, r.equipe2]),
+    [
+      ["ok", "Manchester City FC", "Manchester United FC"],
+      ["ok", "Tottenham Hotspur FC", "Brighton & Hove Albion FC"],
+      ["ok", "FC Internazionale Milano", "AC Milan"],
+      ["ok", "FC Barcelona", "Club Atlético de Madrid"],
+    ]
+  );
+});

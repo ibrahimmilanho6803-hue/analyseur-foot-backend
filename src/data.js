@@ -36,6 +36,28 @@ function createDataService({ config, http, cache = new SwrCache(), now = Date.no
       loader: () => p.fetchSeason(league, year),
     });
 
+  // Noms alternatifs des clubs quand la source en fournit (un appel par championnat, gardé 24 h). Cette étape ne doit
+  // jamais empêcher le chargement des matchs : en cas d'erreur ou de réponse vide, on continue sans.
+  // Une réponse vide est traitée comme une erreur pour ne pas être gardée 24 h ; elle est redemandée au bout d'une heure.
+  async function teamAliases(p, league) {
+    if (typeof p.fetchTeams !== "function") return new Map();
+    try {
+      const rows = await cache.get(`names:${p.name}:${league.key}`, {
+        ttlMs: config.cache.namesTtlMs,
+        staleMs: config.cache.staleMs,
+        errorTtlMs: 60 * 60000,
+        loader: async () => {
+          const list = await p.fetchTeams(league);
+          if (!Array.isArray(list) || !list.length) throw new Error("aucun nom d'équipe reçu");
+          return list;
+        },
+      });
+      return new Map(rows.filter((r) => r && r.id).map((r) => [r.id, Array.isArray(r.aliases) ? r.aliases : []]));
+    } catch (e) {
+      return new Map();
+    }
+  }
+
   async function loadSeasons(league) {
     const year = seasonStartYear(league, now());
     const errors = [];
@@ -85,8 +107,19 @@ function createDataService({ config, http, cache = new SwrCache(), now = Date.no
     const fit = fitLeague(finished, { now: nowMs, halfLifeDays: modelParams.halfLifeDays, priorMatches: modelParams.priorMatches, priorFor });
     const teams = new Map();
     for (const m of all) {
-      for (const t of [m.home, m.away]) if (!teams.has(t.id)) teams.set(t.id, { id: t.id, name: t.name, shortName: t.shortName, leagueKey: league.key });
+      for (const t of [m.home, m.away]) {
+        if (!teams.has(t.id)) teams.set(t.id, { id: t.id, name: t.name, shortName: t.shortName, aliases: [], leagueKey: league.key });
+      }
     }
+    // Les noms alternatifs s'ajoutent aux équipes dès qu'ils sont reçus. On les attend très peu de temps (immédiat quand ils sont
+    // déjà en mémoire) : au premier démarrage la file d'attente de la source peut les retarder, et les matchs n'ont pas à patienter.
+    const addAliases = teamAliases(provider, league).then((aliases) => {
+      for (const t of teams.values()) {
+        const names = aliases.get(t.id);
+        if (names && names.length) t.aliases = names;
+      }
+    });
+    await withTimeout(addAliases, config.cache.namesWaitMs, "noms d'équipes en cours").catch(() => {});
     return { league, provider: provider.name, finished, fixtures, teams, fit, errors, loadedAt: nowMs, seasonYear: year, hasPrevious: hasPrev };
   }
 
@@ -156,6 +189,8 @@ function createDataService({ config, http, cache = new SwrCache(), now = Date.no
           couvert: supported,
           etat: !supported ? "non_couvert" : hit ? "pret" : failure ? "echec" : "chargement",
           charge: Boolean(hit),
+          equipes: hit ? hit.value.teams.size : 0,
+          equipesAvecNomsAlternatifs: hit ? [...hit.value.teams.values()].filter((t) => t.aliases && t.aliases.length).length : 0,
           matchsJoues: hit ? hit.value.finished.length : 0,
           matchsAVenir: hit ? hit.value.fixtures.length : 0,
           source: hit ? hit.value.provider : null,

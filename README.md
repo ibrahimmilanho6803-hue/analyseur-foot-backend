@@ -40,6 +40,22 @@ Serveur Node.js (Express) de l'application **Analyseur Foot Pro**. Il calcule de
 Si une équipe ou un type de pari n'est pas reconnu, la réponse contient `probabilite: null`, un `etat`
 (`equipe_inconnue`, `ambigu`, `ligues_differentes`, `marche_inconnu`…) et un `message` : aucune probabilité n'est inventée.
 
+### Reconnaissance des noms d'équipes
+
+On peut taper un nom officiel, un nom court, une abréviation ou un surnom courant, avec ou sans majuscules, accents
+et tirets : « PSG », « Paris Saint-Germain », « Bayern », « Man City », « Spurs », « Inter », « OM », « Barça »…
+Le serveur compare la saisie aux écritures **de la source de données** (TheSportsDB écrit « Paris SG » et
+« Bayern Munich », football-data.org « Paris Saint-Germain FC »), à une liste d'écritures équivalentes et, pour
+TheSportsDB, aux **noms alternatifs de chaque club** (lus automatiquement, un appel par championnat, gardés 24 h).
+
+- **Mieux vaut demander que se tromper** : « Paris » (Paris FC ou Paris SG ?), « Real », « United » ou « Manchester »
+  renvoient `etat: "ambigu"` avec les clubs possibles dans `suggestions`, jamais une probabilité calculée pour le mauvais
+  club. Quand le nom existe dans plusieurs championnats (« Union » : Berlin ou Saint-Gilloise), l'autre équipe de la
+  sélection tranche : « Union » contre Genk désigne le club belge.
+- **Ajouter un surnom** : une ligne dans `src/team-groups.js` (toutes les écritures d'un même club, une seule fois dans le fichier).
+  Les majuscules, accents, « FC », « AC », « SL »… n'ont pas besoin d'y figurer.
+- `test/teams-reels.test.js` vérifie la reconnaissance avec les écritures réelles de TheSportsDB (relevées en octobre 2026).
+
 ## Variables d'environnement (à saisir dans Render → Environment)
 
 | Variable | Rôle | Par défaut |
@@ -68,7 +84,7 @@ Si une équipe ou un type de pari n'est pas reconnu, la réponse contient `proba
 npm ci
 cp .env.example .env     # puis renseignez les clés
 npm start                # http://localhost:3001/api/status
-npm test                 # 160+ tests automatiques (sans réseau)
+npm test                 # 200+ tests automatiques (sans réseau)
 npm run e2e              # démarre le vrai serveur avec de faux services et vérifie les routes
 ```
 
@@ -84,7 +100,8 @@ analysées que si une clé TheSportsDB payante est fournie (`SPORTSDB_API_KEY`).
 
 Sans clé football-data.org, le serveur peut fonctionner avec **TheSportsDB seul** (10 championnats), à condition que
 la clé soit payante : le chargement des 10 championnats prend alors environ 45 secondes au démarrage (2 saisons × 10
-championnats, un appel toutes les 2 secondes). Avec une clé gratuite, aucun championnat ne se charge ; `/api/status`
+championnats, un appel toutes les 2 secondes). La liste des clubs de chaque championnat (noms alternatifs) est lue
+ensuite, sans retarder les matchs, et gardée 24 h. Avec une clé gratuite, aucun championnat ne se charge ; `/api/status`
 l'indique (voir ci-dessous) et les analyses répondent « données indisponibles ».
 
 ## Ce que l'application ne sait pas
@@ -102,4 +119,7 @@ sa source, l'âge des données et la dernière erreur (pour un championnat en é
 dernière erreur, appels du jour). La liste `avertissements` est **vide seulement quand tout est chargé et à jour** :
 elle signale aussi les championnats encore en chargement, ceux qui ont échoué (avec la raison) et ceux dont la dernière
 actualisation a échoué.
+Pour chaque championnat, `equipes` donne le nombre de clubs connus et `equipesAvecNomsAlternatifs` le nombre de clubs
+dont TheSportsDB a fourni des noms alternatifs. Un `0` partout signifie seulement que cette liste n'a pas été reçue
+(l'analyse fonctionne, avec les écritures de la liste `src/team-groups.js`) ; elle est redemandée au bout d'une heure.
 Les clés n'apparaissent jamais dans les journaux ni dans les réponses.

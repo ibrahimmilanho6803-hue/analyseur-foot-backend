@@ -3,7 +3,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { createFootballData, normalizeFootballData } = require("../src/providers/footballdata");
-const { createTheSportsDb, normalizeTheSportsDb } = require("../src/providers/thesportsdb");
+const { createTheSportsDb, normalizeTheSportsDb, splitAlternates } = require("../src/providers/thesportsdb");
 const { byKey } = require("../src/leagues");
 
 const NOW = Date.UTC(2026, 9, 8, 12, 0, 0);
@@ -151,4 +151,98 @@ test("TheSportsDB : couvre seulement les championnats connus et avec une clé", 
   const http = fakeHttp([{}]);
   assert.equal(createTheSportsDb({ http, key: "" }).supports(byKey.get("PL")), false);
   assert.equal(createTheSportsDb({ http, key: "k" }).supports(byKey.get("SPL")), true);
+});
+
+// ---- Noms alternatifs des clubs (fiches équipes de TheSportsDB) ----
+
+const FL1 = byKey.get("FL1");
+const teamsPayload = (extra = []) => ({
+  teams: [
+    { idTeam: "133714", strTeam: "Paris SG", strTeamShort: "PSG", strTeamAlternate: "Paris Saint-Germain,  Paris Saint Germain , PSG", idLeague: "4334", strLeague: "French Ligue 1" },
+    { idTeam: "133707", strTeam: "Marseille", strTeamAlternate: "Olympique de Marseille, OM", idLeague: "4334", strLeague: "French Ligue 1" },
+    { idTeam: "133821", strTeam: "Brest", strTeamAlternate: "", idLeague: "4334" },
+    ...extra,
+  ],
+});
+
+test("TheSportsDB : les noms alternatifs d'un championnat sont cherchés par nom de championnat", async () => {
+  const http = fakeHttp([teamsPayload()]);
+  const out = await createTheSportsDb({ http, key: "KEY", now: () => NOW }).fetchTeams(FL1);
+  assert.equal(http.calls.length, 1, "une seule requête suffit quand la première répond");
+  assert.equal(http.calls[0].url, "https://www.thesportsdb.com/api/v1/json/KEY/search_all_teams.php?l=French%20Ligue%201");
+  assert.equal(http.calls[0].opts.throttleKey, "thesportsdb", "même cadence que les matchs : la limite de l'offre est respectée");
+  assert.deepEqual(out, [
+    { id: "ts:133714", name: "Paris SG", aliases: ["Paris Saint-Germain", "Paris Saint Germain", "PSG"] },
+    { id: "ts:133707", name: "Marseille", aliases: ["Olympique de Marseille", "OM"] },
+    { id: "ts:133821", name: "Brest", aliases: [] },
+  ]);
+});
+
+test("TheSportsDB : un club d'un autre championnat, sans identifiant ou illisible est écarté", async () => {
+  const http = fakeHttp([teamsPayload([{ idTeam: "1", strTeam: "Intrus", idLeague: "4396" }, { strTeam: "Sans identifiant", idLeague: "4334" }, null, "texte"])]);
+  const out = await createTheSportsDb({ http, key: "KEY" }).fetchTeams(FL1);
+  assert.deepEqual(out.map((t) => t.name), ["Paris SG", "Marseille", "Brest"]);
+});
+
+test("TheSportsDB : une fiche sans indication de championnat est conservée, et « strAlternate » sert de repli", async () => {
+  const http = fakeHttp([{ teams: [{ idTeam: "7", strTeam: "Lyon", strAlternate: "Olympique Lyonnais, OL" }] }]);
+  const out = await createTheSportsDb({ http, key: "KEY" }).fetchTeams(FL1);
+  assert.deepEqual(out, [{ id: "ts:7", name: "Lyon", aliases: ["Olympique Lyonnais", "OL"] }]);
+});
+
+test("TheSportsDB : si la recherche par nom ne donne rien, la liste par identifiant prend le relais", async () => {
+  const http = fakeHttp([{ teams: null }, teamsPayload()]);
+  const out = await createTheSportsDb({ http, key: "KEY" }).fetchTeams(FL1);
+  assert.deepEqual(
+    http.calls.map((c) => c.url),
+    [
+      "https://www.thesportsdb.com/api/v1/json/KEY/search_all_teams.php?l=French%20Ligue%201",
+      "https://www.thesportsdb.com/api/v1/json/KEY/lookup_all_teams.php?id=4334",
+    ]
+  );
+  assert.equal(out.length, 3);
+});
+
+test("TheSportsDB : la liste par identifiant de la clé gratuite (toujours les mêmes clubs anglais) est ignorée", async () => {
+  const stub = { teams: [{ idTeam: "133607", strTeam: "Wigan Athletic", strTeamAlternate: "WAFC", idLeague: "4396", strLeague: "English League 1" }] };
+  const http = fakeHttp([{ teams: null }, stub]);
+  const out = await createTheSportsDb({ http, key: "3" }).fetchTeams(FL1);
+  assert.deepEqual(out, [], "aucun nom alternatif plutôt que ceux d'un autre championnat");
+});
+
+test("TheSportsDB : une adresse en échec n'empêche pas d'essayer l'autre, deux échecs remontent l'erreur", async () => {
+  const boom = Object.assign(new Error("HTTP 500"), { status: 500 });
+  const recovered = await createTheSportsDb({ http: fakeHttp([boom, teamsPayload()]), key: "KEY" }).fetchTeams(FL1);
+  assert.equal(recovered.length, 3);
+
+  const both = fakeHttp([boom, Object.assign(new Error("HTTP 429"), { status: 429 })]);
+  await assert.rejects(createTheSportsDb({ http: both, key: "KEY" }).fetchTeams(FL1), (e) => e.status === 429);
+  assert.equal(both.calls.length, 2);
+});
+
+test("TheSportsDB : un championnat sans nom connu passe directement par la liste par identifiant", async () => {
+  const http = fakeHttp([teamsPayload()]);
+  await createTheSportsDb({ http, key: "KEY" }).fetchTeams({ key: "XX", tsdb: "4334" });
+  assert.deepEqual(
+    http.calls.map((c) => c.url),
+    ["https://www.thesportsdb.com/api/v1/json/KEY/lookup_all_teams.php?id=4334"]
+  );
+});
+
+test("TheSportsDB : chaque championnat suivi a son nom, et ces noms sont tous différents", () => {
+  const { LEAGUES } = require("../src/leagues");
+  const names = LEAGUES.map((l) => l.tsdbName);
+  assert.ok(names.every((n) => typeof n === "string" && n.length > 5));
+  assert.equal(new Set(names).size, names.length);
+});
+
+test("splitAlternates : espaces, doublons, nom du club lui-même, extrêmes et valeurs absentes", () => {
+  assert.deepEqual(splitAlternates("  Olympique Lyonnais ,Olympique   Lyon,, OL , olympique lyonnais", "Lyon"), ["Olympique Lyonnais", "Olympique Lyon", "OL"]);
+  assert.deepEqual(splitAlternates("Lyon, LYON, lyon", "Lyon"), [], "le nom du club n'est pas un nom alternatif");
+  assert.deepEqual(splitAlternates("A, B, X".replace(/X/, "x".repeat(61)), "Club"), [], "trop court (1 lettre) ou trop long (61 lettres)");
+  assert.deepEqual(splitAlternates(null, "Lyon"), []);
+  assert.deepEqual(splitAlternates(undefined, undefined), []);
+  assert.deepEqual(splitAlternates(12345, "Lyon"), ["12345"]);
+  const many = Array.from({ length: 30 }, (_, i) => `Nom ${i}`).join(",");
+  assert.equal(splitAlternates(many, "Club").length, 12, "au plus 12 noms par club");
 });
