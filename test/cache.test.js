@@ -109,6 +109,21 @@ test("peek renvoie null pour une clé inconnue et l'âge pour une clé connue", 
   assert.equal(hit.ageMs, 300);
 });
 
+test("peekError : raison du dernier échec d'une clé jamais chargée, effacée dès qu'une valeur existe", async () => {
+  const { clock, cache } = setup();
+  assert.equal(cache.peekError("k"), null);
+  const broken = async () => {
+    throw new Error("source en panne");
+  };
+  await assert.rejects(cache.get("k", { ttlMs: 1000, loader: broken }), /source en panne/);
+  assert.equal(cache.peek("k"), null);
+  assert.equal(cache.peekError("k").message, "source en panne");
+  clock.t = 10 * 60000; // le délai de mémorisation de l'échec est passé : la raison reste visible jusqu'au prochain succès
+  assert.equal(cache.peekError("k").message, "source en panne");
+  assert.equal(await cache.get("k", { ttlMs: 1000, loader: async () => 1 }), 1);
+  assert.equal(cache.peekError("k"), null);
+});
+
 test("la taille est bornée", async () => {
   const { cache } = setup({ max: 3 });
   for (let i = 0; i < 6; i++) await cache.get(`k${i}`, { ttlMs: 1000, loader: async () => i });

@@ -53,7 +53,7 @@ Si une équipe ou un type de pari n'est pas reconnu, la réponse contient `proba
 | `AI_MAX_ADJUST_POINTS` | Correction maximale de l'IA, en points de pourcentage. | `4` |
 | `AI_TIMEOUT_MS` | Délai maximal d'un appel à l'IA. | `40000` |
 | `ALLOWED_ORIGINS` | Adresses de sites autorisées, séparées par des virgules (s'ajoutent au site officiel, aux aperçus Vercel, à l'application mobile et à `localhost`). | — |
-| `SPORTSDB_API_KEY` | Clé **payante** TheSportsDB (Écosse, Belgique). La clé gratuite ne renvoie que 15 matchs par saison : elle est détectée et ignorée. | — |
+| `SPORTSDB_API_KEY` | Clé TheSportsDB. **Payante** pour être utile : la clé gratuite ne renvoie qu'une partie de la saison (15 matchs), elle est détectée et ignorée. Source de secours de football-data.org, et seule source pour l'Écosse et la Belgique. Peut aussi servir **seule** (voir « Couverture »). | — |
 | `DATA_PROVIDER` | Ordre des sources, ex. `footballdata,thesportsdb`. | selon les clés présentes |
 | `RATE_LIMIT_PER_MIN` / `RATE_LIMIT_AI_PER_MIN` | Demandes par minute et par adresse IP (général / analyses). | `90` / `30` |
 | `TOP_WINDOW_HOURS` / `TOP_MAX_WINDOW_HOURS` / `TOP_TARGET_ODDS` | Fenêtre du Top 3 et cote totale visée. | `72` / `168` / `2.5` |
@@ -82,6 +82,11 @@ football-data.org (offre gratuite) : Premier League, Liga, Serie A, Bundesliga, 
 Eredivisie, Brasileirão. L'Écosse et la Belgique ne sont pas incluses dans cette offre : elles ne sont
 analysées que si une clé TheSportsDB payante est fournie (`SPORTSDB_API_KEY`).
 
+Sans clé football-data.org, le serveur peut fonctionner avec **TheSportsDB seul** (10 championnats), à condition que
+la clé soit payante : le chargement des 10 championnats prend alors environ 45 secondes au démarrage (2 saisons × 10
+championnats, un appel toutes les 2 secondes). Avec une clé gratuite, aucun championnat ne se charge ; `/api/status`
+l'indique (voir ci-dessous) et les analyses répondent « données indisponibles ».
+
 ## Ce que l'application ne sait pas
 
 - Aucune information sur les blessures, suspensions, compositions ou le contexte du jour : les probabilités
@@ -91,6 +96,10 @@ analysées que si une clé TheSportsDB payante est fournie (`SPORTSDB_API_KEY`).
 
 ## Dépannage
 
-Ouvrez `/api/status` : il indique, championnat par championnat, si les données sont chargées, leur source,
-leur âge, la dernière erreur éventuelle, ainsi que l'état de l'IA (dernier succès, dernière erreur, appels du jour).
+Ouvrez `/api/status` : il indique, championnat par championnat, son état (`etat` : `pret`, `chargement` ou `echec`),
+sa source, l'âge des données et la dernière erreur (pour un championnat en échec : la raison, par exemple
+« TheSportsDB : données incomplètes (15 matchs reçus : clé gratuite ?) »), ainsi que l'état de l'IA (dernier succès,
+dernière erreur, appels du jour). La liste `avertissements` est **vide seulement quand tout est chargé et à jour** :
+elle signale aussi les championnats encore en chargement, ceux qui ont échoué (avec la raison) et ceux dont la dernière
+actualisation a échoué.
 Les clés n'apparaissent jamais dans les journaux ni dans les réponses.

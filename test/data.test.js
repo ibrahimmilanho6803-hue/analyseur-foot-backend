@@ -166,6 +166,49 @@ test("allTeams et status reflètent ce qui est chargé", async () => {
   assert.deepEqual(st.sources, ["Source fake"]);
 });
 
+test("status : état de chaque championnat et raison d'un échec (jamais « pas chargé » sans explication)", async () => {
+  const { cur, prev } = fixtureSeasons();
+  const p = fakeProvider("a", (league, year) => {
+    if (league.key === "PD") throw new Error("source en panne");
+    return { matches: year === 2026 ? cur : prev, limited: false };
+  }, { keys: ["PL", "PD", "SA"] });
+  const svc = service([p]);
+  const before = svc.status().championnats;
+  assert.deepEqual(before.filter((c) => c.couvert).map((c) => c.etat), ["chargement", "chargement", "chargement"]);
+  assert.equal(before.find((c) => c.key === "BSA").etat, "non_couvert");
+  assert.equal(svc.allFailed(), false);
+  await svc.ensureAll({ budgetMs: 1000 });
+  const st = svc.status().championnats;
+  assert.equal(st.find((c) => c.key === "PL").etat, "pret");
+  const pd = st.find((c) => c.key === "PD");
+  assert.equal(pd.etat, "echec");
+  assert.equal(pd.charge, false);
+  assert.match(pd.derniereErreur, /source en panne/);
+  assert.equal(svc.allFailed(), false, "PL et SA sont prêts");
+});
+
+test("allFailed : vrai seulement quand rien n'est chargé et que tout a échoué", async () => {
+  const partial = fakeProvider("a", () => ({ matches: [], limited: true, rawCount: 15 }), { keys: ["PL", "SA"] });
+  const svc = service([partial]);
+  assert.equal(svc.allFailed(), false, "rien n'a encore été essayé : simple chargement");
+  await svc.ensureAll({ budgetMs: 1000 });
+  assert.equal(svc.allFailed(), true);
+  const pl = svc.status().championnats.find((c) => c.key === "PL");
+  assert.equal(pl.etat, "echec");
+  assert.match(pl.derniereErreur, /clé gratuite/);
+});
+
+test("les erreurs exposées (status, ensureAll) ne contiennent jamais de clé", async () => {
+  const leaky = fakeProvider("a", () => {
+    throw new Error("réseau : https://www.thesportsdb.com/api/v1/json/SECRET123/eventsseason.php?id=4328 a échoué");
+  }, { keys: ["PL"] });
+  const svc = service([leaky]);
+  const r = await svc.ensureAll({ budgetMs: 1000 });
+  assert.equal(r.failed.length, 1);
+  assert.ok(!JSON.stringify(r.failed).includes("SECRET123"));
+  assert.ok(!JSON.stringify(svc.status()).includes("SECRET123"));
+});
+
 test("un club absent de la saison précédente (promu) reçoit un a priori plus prudent", async () => {
   const { cur, prev } = fixtureSeasons();
   const veryOld = Date.UTC(2006, 0, 1); // trop ancien pour compter dans le calcul, mais prouve la présence

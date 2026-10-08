@@ -19,6 +19,13 @@ class SwrCache {
     return { value: e.value, ageMs: this.now() - e.at, lastError: e.error || null };
   }
 
+  // Dernière erreur d'une clé qui n'a jamais pu être chargée (null si rien n'a échoué, ou si une valeur existe).
+  peekError(key) {
+    const e = this.map.get(key);
+    if (!e || e.value !== undefined || !e.error) return null;
+    return { message: e.error.message || "erreur", at: e.at };
+  }
+
   async get(key, { ttlMs, staleMs = 0, errorTtlMs = 30000, loader }) {
     const e = this.map.get(key);
     const t = this.now();

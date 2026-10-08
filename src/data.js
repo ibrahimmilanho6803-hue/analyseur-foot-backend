@@ -5,7 +5,7 @@ const { LEAGUES, byKey, seasonStartYear } = require("./leagues");
 const { fitLeague } = require("./model");
 const { createFootballData } = require("./providers/footballdata");
 const { createTheSportsDb } = require("./providers/thesportsdb");
-const { withTimeout } = require("./util");
+const { redact, withTimeout } = require("./util");
 
 function explain(e) {
   if (!e) return "erreur inconnue";
@@ -109,8 +109,14 @@ function createDataService({ config, http, cache = new SwrCache(), now = Date.no
     );
     const ready = settled.filter((s) => s.data).map((s) => s.data);
     const pending = settled.filter((s) => s.error && s.error.code === "TIMEOUT").map((s) => s.l.key);
-    const failed = settled.filter((s) => s.error && s.error.code !== "TIMEOUT").map((s) => ({ key: s.l.key, message: s.error.message }));
+    const failed = settled.filter((s) => s.error && s.error.code !== "TIMEOUT").map((s) => ({ key: s.l.key, message: redact(s.error.message) }));
     return { ready, pending, failed };
+  }
+
+  // Vrai quand aucun championnat n'est chargé et que tous ont déjà échoué (source en panne, clé refusée, données partielles…).
+  // Tant qu'un seul est encore en cours de chargement ou jamais essayé, le service est simplement « en chargement ».
+  function allFailed() {
+    return leagues.length > 0 && leagues.every((l) => !cache.peek(`league:${l.key}`) && Boolean(cache.peekError(`league:${l.key}`)));
   }
 
   function allTeams() {
@@ -141,18 +147,21 @@ function createDataService({ config, http, cache = new SwrCache(), now = Date.no
       championnats: LEAGUES.map((l) => {
         const supported = leagues.includes(l);
         const hit = supported ? cache.peek(`league:${l.key}`) : null;
+        // Un championnat jamais chargé garde la raison de son dernier échec : sans elle, « pas chargé » ne dit pas pourquoi.
+        const failure = supported && !hit ? cache.peekError(`league:${l.key}`) : null;
         return {
           key: l.key,
           nom: l.name,
           pays: l.country,
           couvert: supported,
+          etat: !supported ? "non_couvert" : hit ? "pret" : failure ? "echec" : "chargement",
           charge: Boolean(hit),
           matchsJoues: hit ? hit.value.finished.length : 0,
           matchsAVenir: hit ? hit.value.fixtures.length : 0,
           source: hit ? hit.value.provider : null,
           ageMinutes: hit ? Math.round(hit.ageMs / 60000) : null,
           alertes: hit ? hit.value.errors : [],
-          derniereErreur: hit && hit.lastError ? hit.lastError.message : null,
+          derniereErreur: hit && hit.lastError ? redact(hit.lastError.message) : failure ? redact(failure.message) : null,
         };
       }),
     };
@@ -167,7 +176,7 @@ function createDataService({ config, http, cache = new SwrCache(), now = Date.no
 
   const getModelParams = () => ({ ...modelParams });
 
-  return { leagues, getLeagueData, ensureAll, allTeams, warmUp, status, providers: list, setModelParams, getModelParams };
+  return { leagues, getLeagueData, ensureAll, allTeams, allFailed, warmUp, status, providers: list, setModelParams, getModelParams };
 }
 
 module.exports = { createDataService, explain };

@@ -71,7 +71,19 @@ function createApp({ config, data, ai, analysis, coupons, tuner = null, now = Da
     if (!config.providers.order.length) avertissements.push("Aucune source de données configurée : ajoutez FOOTBALL_DATA_API_KEY (offre gratuite de football-data.org).");
     if (!config.anthropic.key) avertissements.push("ANTHROPIC_API_KEY absente : l'IA est désactivée, le modèle statistique répond seul.");
     const donnees = data.status();
-    for (const c of donnees.championnats) if (c.couvert && c.alertes.length) avertissements.push(`${c.nom} : ${c.alertes[0]}`);
+    // « avertissements vide » doit vouloir dire « tout est chargé et à jour » : on signale donc aussi ce qui n'a jamais pu
+    // se charger (avec la raison, regroupée par message) et ce qui est encore en cours de chargement.
+    const echecs = new Map();
+    let enChargement = 0;
+    for (const c of donnees.championnats) {
+      if (!c.couvert) continue;
+      if (c.alertes.length) avertissements.push(`${c.nom} : ${c.alertes[0]}`);
+      if (c.etat === "echec") echecs.set(c.derniereErreur, [...(echecs.get(c.derniereErreur) || []), c.nom]);
+      else if (c.etat === "chargement") enChargement += 1;
+      else if (c.derniereErreur) avertissements.push(`${c.nom} : la dernière actualisation a échoué (${c.derniereErreur}), données vieilles de ${c.ageMinutes} min.`);
+    }
+    for (const [message, noms] of echecs) avertissements.push(`Chargement impossible (${noms.join(", ")}) : ${message}`);
+    if (enChargement) avertissements.push(`Chargement en cours : ${enChargement} championnat(s) pas encore prêt(s).`);
     res.json({
       service: "Analyseur Foot Pro — API",
       version: VERSION,

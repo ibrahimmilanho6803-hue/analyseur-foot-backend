@@ -99,7 +99,9 @@ function createAnalysis({ config, data, ai, now = Date.now, log = console }) {
 
   function resolveTeams(q1, q2) {
     const teams = data.allTeams();
-    if (!teams.length) return { state: "chargement" };
+    // Aucune équipe connue : soit le chargement n'est pas fini (il suffit d'attendre), soit toutes les sources ont échoué
+    // (attendre ne servirait à rien : mieux vaut le dire que promettre « réessayez dans une minute »).
+    if (!teams.length) return { state: data.allFailed() ? "donnees_indisponibles" : "chargement" };
     let a = findTeam(q1, teams);
     let b = findTeam(q2, teams);
     if (a.team && !b.team) b = findTeam(q2, teams, { leagueKey: a.team.leagueKey });
@@ -120,6 +122,7 @@ function createAnalysis({ config, data, ai, now = Date.now, log = console }) {
 
   const MESSAGES = {
     chargement: "Les données des championnats sont en cours de chargement, réessayez dans une minute.",
+    donnees_indisponibles: "Les données de matchs sont momentanément indisponibles (la source de données ne répond pas ou refuse l'accès). Réessayez plus tard.",
     equipe_inconnue: "Équipe introuvable : vérifiez l'orthographe ou utilisez le nom complet du club.",
     ambigu: "Nom d'équipe ambigu : précisez le nom complet du club.",
     meme_equipe: "Les deux équipes sont identiques.",

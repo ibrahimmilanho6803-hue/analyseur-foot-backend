@@ -64,6 +64,42 @@ test("état : sources, IA, réglages du modèle, aucun secret", async () => {
   }
 });
 
+test("état : « avertissements » vide seulement quand tout est chargé ; sinon la raison est donnée", async () => {
+  const s = await start({ env: { FOOTBALL_DATA_API_KEY: "test-fd" } });
+  try {
+    const avant = (await s.call("/api/status")).json;
+    assert.ok(avant.avertissements.some((a) => /Chargement en cours : 3 championnat/.test(a)), JSON.stringify(avant.avertissements));
+    assert.deepEqual(avant.donnees.championnats.filter((c) => c.couvert).map((c) => c.etat), ["chargement", "chargement", "chargement"]);
+    await s.w.data.ensureAll();
+    const apres = (await s.call("/api/status")).json;
+    assert.deepEqual(apres.avertissements, []);
+    assert.deepEqual(apres.donnees.championnats.filter((c) => c.couvert).map((c) => c.etat), ["pret", "pret", "pret"]);
+  } finally {
+    await s.close();
+  }
+});
+
+test("état : une source en panne donne l'avertissement « Chargement impossible » avec la raison (et /api/analyze l'explique)", async () => {
+  const s = await start({ failing: ["PL", "PD", "SA"], aiBehaviour: "off", env: { FOOTBALL_DATA_API_KEY: "test-fd" } });
+  try {
+    const a = await s.call("/api/analyze", { method: "POST", body: { equipe1: "Arsenal", equipe2: "Chelsea", typePari: "Match nul" } });
+    assert.equal(a.status, 200);
+    assert.equal(a.json.etat, "donnees_indisponibles");
+    const r = (await s.call("/api/status")).json;
+    assert.equal(r.avertissements.length, 1);
+    assert.match(r.avertissements[0], /^Chargement impossible \(Premier League, Liga, Serie A\) : .*source en panne/);
+    const pl = r.donnees.championnats.find((c) => c.key === "PL");
+    assert.equal(pl.etat, "echec");
+    assert.equal(pl.charge, false);
+    assert.match(pl.derniereErreur, /source en panne/);
+    const top = await s.call("/api/top-matches");
+    assert.equal(top.status, 503);
+    assert.equal(top.json.details.length, 3);
+  } finally {
+    await s.close();
+  }
+});
+
 test("POST /api/analyze : une sélection", async () => {
   const s = await start();
   try {

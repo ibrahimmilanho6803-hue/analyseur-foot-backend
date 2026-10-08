@@ -167,6 +167,16 @@ test("sans aucune donnée chargée, l'état « chargement » est renvoyé", () =
   assert.equal(w.analysis.resolveTeams("Arsenal", "Chelsea").state, "chargement");
 });
 
+test("si toutes les sources ont échoué, le message le dit au lieu de promettre « réessayez dans une minute »", async () => {
+  const w = buildWorld({ aiBehaviour: "off", failing: ["PL", "PD", "SA"] });
+  const [r] = await w.analysis.analyzeLegs([leg("Arsenal", "Chelsea", "Match nul")]);
+  assert.equal(r.etat, "donnees_indisponibles");
+  assert.equal(r.probabilite, null);
+  assert.equal(r.donneesInsuffisantes, true);
+  assert.match(r.message, /indisponibles/);
+  assert.doesNotMatch(r.message, /minute/);
+});
+
 test("la confiance baisse avec peu de données ou si l'IA est réservée, jamais l'inverse", () => {
   const { confidence } = buildWorld().analysis;
   assert.equal(confidence({ level: 0 }, 0.9, null), "faible");
