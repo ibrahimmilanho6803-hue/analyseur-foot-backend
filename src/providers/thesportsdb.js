@@ -46,6 +46,32 @@ function normalize(e, nowMs) {
   };
 }
 
+// « strTeamAlternate » : noms alternatifs séparés par des virgules (« Olympique Lyonnais, Olympique Lyon, OL »).
+function splitAlternates(value, name) {
+  const seen = new Set([String(name || "").trim().toLowerCase()]);
+  const out = [];
+  for (const part of String(value || "").split(",")) {
+    const alt = part.trim().replace(/\s+/g, " ");
+    const k = alt.toLowerCase();
+    if (alt.length < 2 || alt.length > 60 || seen.has(k)) continue;
+    seen.add(k);
+    out.push(alt);
+    if (out.length >= 12) break;
+  }
+  return out;
+}
+
+// Une équipe appartient au championnat demandé si sa fiche l'indique (fiche sans indication : on lui fait confiance).
+function inLeague(t, league) {
+  const id = t.idLeague;
+  return id === undefined || id === null || id === "" || String(id) === String(league.tsdb);
+}
+
+function toTeam(t) {
+  const alternate = t.strTeamAlternate !== undefined ? t.strTeamAlternate : t.strAlternate;
+  return { id: `ts:${t.idTeam}`, name: String(t.strTeam || ""), aliases: splitAlternates(alternate, t.strTeam) };
+}
+
 function createTheSportsDb({ http, key, now = Date.now, gapMs = GAP_MS }) {
   return {
     name: "thesportsdb",
@@ -65,7 +91,30 @@ function createTheSportsDb({ http, key, now = Date.now, gapMs = GAP_MS }) {
       }
       return { matches: [], limited: false, rawCount: 0 };
     },
+    // Noms alternatifs des clubs d'un championnat (« PSG », « OL », « Bayern »…) : sert à reconnaître ce que l'utilisateur tape.
+    // Les identifiants sont ceux des matchs (« ts:… »). Deux adresses sont essayées, dans cet ordre :
+    //  1. la recherche par nom de championnat (vérifiée pour les 10 championnats suivis) ;
+    //  2. la liste par identifiant, qui avec la clé gratuite renvoie toujours les mêmes clubs anglais de 3e division.
+    // Toute équipe d'un autre championnat que celui demandé est écartée : mieux vaut aucun nom alternatif que de mauvais.
+    // Avec une clé gratuite la liste est tronquée à 10 clubs, ce qui est sans gravité ici.
+    async fetchTeams(league) {
+      const urls = [];
+      if (league.tsdbName) urls.push(`${BASE}/${key}/search_all_teams.php?l=${encodeURIComponent(league.tsdbName)}`);
+      urls.push(`${BASE}/${key}/lookup_all_teams.php?id=${league.tsdb}`);
+      let lastError = null;
+      for (const url of urls) {
+        try {
+          const data = await http.getJson(url, { throttleKey: "thesportsdb", minIntervalMs: gapMs, timeoutMs: 25000, retries: 1 });
+          const rows = (Array.isArray(data && data.teams) ? data.teams : []).filter((t) => t && t.idTeam && inLeague(t, league));
+          if (rows.length) return rows.map(toTeam);
+        } catch (e) {
+          lastError = e;
+        }
+      }
+      if (lastError) throw lastError;
+      return [];
+    },
   };
 }
 
-module.exports = { createTheSportsDb, normalizeTheSportsDb: normalize };
+module.exports = { createTheSportsDb, normalizeTheSportsDb: normalize, splitAlternates };

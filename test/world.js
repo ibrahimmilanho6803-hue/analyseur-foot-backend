@@ -40,7 +40,8 @@ function leagueMatches(key, seed, fixtureHours) {
   };
 }
 
-function buildWorld({ fixtureHours = [4, 14, 26, 38, 50, 62], failing = [], aiBehaviour = "ok", env = {}, keys = ["PL", "PD", "SA"] } = {}) {
+// aliases : { "PL:0": ["Les Gunners"], … } = noms alternatifs que la source de données fournit pour certains clubs.
+function buildWorld({ fixtureHours = [4, 14, 26, 38, 50, 62], failing = [], aiBehaviour = "ok", env = {}, keys = ["PL", "PD", "SA"], aliases = null } = {}) {
   const clock = { t: NOW };
   const now = () => clock.t;
   const store = {};
@@ -54,6 +55,12 @@ function buildWorld({ fixtureHours = [4, 14, 26, 38, 50, 62], failing = [], aiBe
       return { matches: year === 2026 ? store[league.key].cur : store[league.key].prev, limited: false };
     },
   };
+  if (aliases) {
+    provider.fetchTeams = async (league) =>
+      Object.entries(aliases)
+        .filter(([id]) => id.startsWith(`${league.key}:`))
+        .map(([id, names]) => ({ id, name: NAMES[league.key][Number(id.split(":")[1])], aliases: names }));
+  }
   const config = loadConfig({ ANTHROPIC_API_KEY: "test-key", ...env });
   const data = createDataService({ config, http: null, cache: new SwrCache({ now }), now, log: quiet, providers: [provider] });
 

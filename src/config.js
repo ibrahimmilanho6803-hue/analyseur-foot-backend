@@ -63,6 +63,8 @@ function loadConfig(env = process.env) {
     cache: {
       seasonTtlMs: num(env.CACHE_SEASON_TTL_MIN, 20) * 60000,
       previousSeasonTtlMs: 24 * 3600000,
+      namesTtlMs: 24 * 3600000,
+      namesWaitMs: 2500,
       staleMs: 12 * 3600000,
       refreshEveryMs: num(env.CACHE_REFRESH_MIN, 25) * 60000,
     },
