@@ -55,7 +55,7 @@ Si une équipe ou un type de pari n'est pas reconnu, la réponse contient `proba
 | `ALLOWED_ORIGINS` | Adresses de sites autorisées, séparées par des virgules (s'ajoutent au site officiel, aux aperçus Vercel, à l'application mobile et à `localhost`). | — |
 | `SPORTSDB_API_KEY` | Clé **payante** TheSportsDB (Écosse, Belgique). La clé gratuite ne renvoie que 15 matchs par saison : elle est détectée et ignorée. | — |
 | `DATA_PROVIDER` | Ordre des sources, ex. `footballdata,thesportsdb`. | selon les clés présentes |
-| `RATE_LIMIT_PER_MIN` / `RATE_LIMIT_AI_PER_MIN` | Demandes par minute et par adresse IP (général / analyses). | `90` / `12` |
+| `RATE_LIMIT_PER_MIN` / `RATE_LIMIT_AI_PER_MIN` | Demandes par minute et par adresse IP (général / analyses). | `90` / `30` |
 | `TOP_WINDOW_HOURS` / `TOP_MAX_WINDOW_HOURS` / `TOP_TARGET_ODDS` | Fenêtre du Top 3 et cote totale visée. | `72` / `168` / `2.5` |
 | `MODEL_AUTOTUNE` | `false` pour désactiver le réglage automatique du modèle. | `true` |
 | `MODEL_HALF_LIFE_DAYS` / `MODEL_PRIOR_MATCHES` | Réglages de départ du modèle (affinés ensuite automatiquement). | `300` / `10` |

@@ -131,7 +131,7 @@ function createCoupons({ config, data, analysis, now = Date.now, log = console }
       topMatches: picks.map(entryFor),
       coteTotale: odds.toFixed(2),
       probabiliteCombinee: pct1(joint),
-      objectifCoteAtteint: odds >= top.targetOdds,
+      objectifCoteAtteint: Number(odds.toFixed(2)) >= top.targetOdds, // comparé à la cote affichée (2 décimales), sinon « 2.50 » pourrait être déclaré inférieur à 2.5
       ia: { statut: iaStatut, modele: config.anthropic.model },
       ...(picks.length < top.count ? { message: `Seulement ${picks.length} match(s) exploitable(s) trouvé(s) dans les ${windowHours} prochaines heures.` } : {}),
       ...(cands.some((c) => c.quality === 0) ? { avertissementDonnees: "Certaines équipes ont peu de matchs récents : estimation moins fiable." } : {}),

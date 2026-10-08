@@ -68,7 +68,7 @@ function loadConfig(env = process.env) {
     },
     limits: {
       generalPerMin: num(env.RATE_LIMIT_PER_MIN, 90),
-      aiPerMin: num(env.RATE_LIMIT_AI_PER_MIN, 12),
+      aiPerMin: num(env.RATE_LIMIT_AI_PER_MIN, 30),
       bodyLimit: "20kb",
       maxLegs: 12,
     },
