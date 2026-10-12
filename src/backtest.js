@@ -29,7 +29,8 @@ function newAcc() {
     matches: 0,
     first: Infinity,
     last: -Infinity,
-    markets: EVAL.map(() => ({ n: 0, bm: 0, br: 0, lm: 0, lr: 0, sp: 0, sy: 0 })),
+    markets: EVAL.map(() => ({ n: 0, bm: 0, br: 0, lm: 0, lr: 0, sp: 0, sy: 0, sp2: 0, spy: 0 })),
+    goals: { n: 0, pred: 0, real: 0 },
     bins: Array.from({ length: 10 }, () => ({ n: 0, sp: 0, sy: 0 })),
     x12: { n: 0, bm: 0, br: 0 },
     picks: { n: 0, hits: 0, sp: 0 },
@@ -40,13 +41,21 @@ function newAcc() {
 function runLeague(acc, key, finished, opts) {
   const { now, evalDays, stepDays, minTrain, model, pick } = opts;
   const from = now - evalDays * DAY_MS;
-  const local = { n: 0, bm: 0, br: 0 };
+  const local = { n: 0, bm: 0, br: 0, goalsPred: 0, goalsReal: 0 };
   for (let t = from; t < now; t += stepDays * DAY_MS) {
     const block = finished.filter((m) => m.kickoff >= t && m.kickoff < Math.min(now, t + stepDays * DAY_MS));
     if (!block.length) continue;
     const train = finished.filter((m) => m.kickoff < t);
     if (train.length < minTrain) continue;
-    const fit = fitLeague(train, { now: t, halfLifeDays: model.halfLifeDays, priorMatches: model.priorMatches });
+    const fit = fitLeague(train, {
+      now: t,
+      halfLifeDays: model.halfLifeDays,
+      priorMatches: model.priorMatches,
+      levelHalfLifeDays: model.levelHalfLifeDays,
+      levelPriorMatches: model.levelPriorMatches,
+      strengthExponent: model.strengthExponent,
+      levelFactor: model.levelFactor,
+    });
     const ref = EVAL.map((mk) => train.filter((m) => mk.test(m.hg, m.ag)).length / train.length);
     for (const m of block) {
       if (!fit.teams.has(m.home.id) || !fit.teams.has(m.away.id)) continue; // équipe inconnue du modèle à cette date
@@ -54,6 +63,11 @@ function runLeague(acc, key, finished, opts) {
       const probs = evaluateAll(scoreMatrix(lh, la, { rho: model.rho, maxGoals: model.maxGoals }));
       const pOf = new Map(probs.map((x) => [x.label, x.p]));
       acc.matches++;
+      acc.goals.n++;
+      acc.goals.pred += lh + la;
+      acc.goals.real += m.hg + m.ag;
+      local.goalsPred += lh + la;
+      local.goalsReal += m.hg + m.ag;
       acc.first = Math.min(acc.first, m.kickoff);
       acc.last = Math.max(acc.last, m.kickoff);
       EVAL.forEach((mk, i) => {
@@ -67,6 +81,8 @@ function runLeague(acc, key, finished, opts) {
         a.lr += logLoss(ref[i], y);
         a.sp += p;
         a.sy += y;
+        a.sp2 += p * p;
+        a.spy += p * y;
         const bin = acc.bins[Math.min(9, Math.floor(p * 10))];
         bin.n++;
         bin.sp += p;
@@ -101,11 +117,18 @@ function report(acc, opts) {
   const x12 = acc.x12;
   const marches = EVAL.map((mk, i) => {
     const a = acc.markets[i];
+    // Pente de calibration : régression du résultat (0 ou 1) sur la probabilité annoncée. 1 = probabilités justes ;
+    // moins de 1 = annonces trop tranchées (trop proches de 0 % ou de 100 %) ; plus de 1 = trop prudentes.
+    const meanP = a.n ? a.sp / a.n : 0;
+    const meanY = a.n ? a.sy / a.n : 0;
+    const varP = a.n ? a.sp2 / a.n - meanP * meanP : 0;
+    const covPY = a.n ? a.spy / a.n - meanP * meanY : 0;
     return {
       marche: mk.label,
       matchs: a.n,
       probabiliteMoyenne: a.n ? round(a.sp / a.n, 3) : null,
       frequenceReelle: a.n ? round(a.sy / a.n, 3) : null,
+      pente: a.n && varP > 1e-9 ? round(covPY / varP, 3) : null,
       brierModele: a.n ? round(a.bm / a.n, 4) : null,
       brierReference: a.n ? round(a.br / a.n, 4) : null,
       gainBrierPct: a.n ? gain(a.bm, a.br) : null,
@@ -120,7 +143,19 @@ function report(acc, opts) {
   const hitRate = acc.picks.n ? acc.picks.hits / acc.picks.n : null;
   const predicted = acc.picks.n ? acc.picks.sp / acc.picks.n : null;
   return {
-    parametres: { jours: opts.evalDays, pasEnJours: opts.stepDays },
+    parametres: {
+      jours: opts.evalDays,
+      pasEnJours: opts.stepDays,
+      modele: {
+        demiVieJours: opts.model.halfLifeDays,
+        matchsAPriori: opts.model.priorMatches,
+        rho: opts.model.rho,
+        niveauDemiVieJours: opts.model.levelHalfLifeDays || null,
+        niveauMatchsAPriori: opts.model.levelHalfLifeDays ? opts.model.levelPriorMatches : null,
+        exposantDesForces: opts.model.strengthExponent,
+        coefficientDeNiveau: opts.model.levelFactor,
+      },
+    },
     matchsEvalues: acc.matches,
     periode: acc.matches ? { du: new Date(acc.first).toISOString().slice(0, 10), au: new Date(acc.last).toISOString().slice(0, 10) } : null,
     resultat1N2: x12.n ? { brierModele: round(x12.bm / x12.n, 4), brierReference: round(x12.br / x12.n, 4), gainPct: gain1x2 } : null,
@@ -135,7 +170,15 @@ function report(acc, opts) {
           ecart: round(hitRate - predicted, 3),
         }
       : null,
-    parChampionnat: [...acc.byLeague.entries()].map(([key, v]) => ({ championnat: key, matchs: v.n, gainBrier1N2Pct: v.n ? gain(v.bm, v.br) : null })),
+    // Buts par match : prévus par le modèle et réellement marqués. Un écart durable fausse « plus de 2.5 buts », « les deux équipes marquent »…
+    butsParMatch: acc.goals.n ? { prevus: round(acc.goals.pred / acc.goals.n, 3), reels: round(acc.goals.real / acc.goals.n, 3) } : null,
+    parChampionnat: [...acc.byLeague.entries()].map(([key, v]) => ({
+      championnat: key,
+      matchs: v.n,
+      gainBrier1N2Pct: v.n ? gain(v.bm, v.br) : null,
+      butsPrevus: v.n ? round(v.goalsPred / v.n, 2) : null,
+      butsReels: v.n ? round(v.goalsReal / v.n, 2) : null,
+    })),
     lecture: !acc.matches
       ? "Pas assez de matchs joués pour mesurer la fiabilité."
       : `Sur ${acc.matches} matchs récents rejoués pas à pas, le modèle ${gain1x2 > 0 ? "fait mieux" : "ne fait pas mieux"} que la référence (fréquences moyennes du championnat) de ${Math.abs(gain1x2)} % sur le résultat 1-N-2` +
@@ -146,7 +189,14 @@ function report(acc, opts) {
 const defer = () => new Promise((resolve) => setImmediate(resolve));
 
 function prepare({ now = Date.now(), evalDays = 120, stepDays = 7, minTrain = 120, model, pick = { minP: 0.55, maxP: 0.88 } } = {}) {
-  return { now, evalDays, stepDays, minTrain, model: { halfLifeDays: 300, priorMatches: 10, rho: -0.08, maxGoals: 9, ...model }, pick };
+  return {
+    now,
+    evalDays,
+    stepDays,
+    minTrain,
+    model: { halfLifeDays: 300, priorMatches: 10, rho: -0.08, maxGoals: 9, levelHalfLifeDays: 0, levelPriorMatches: 40, strengthExponent: 1, levelFactor: 1, ...model },
+    pick,
+  };
 }
 
 // leagues : [{ key, finished }] ; model : { halfLifeDays, priorMatches, rho, maxGoals }

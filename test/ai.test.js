@@ -247,7 +247,8 @@ test("budget quotidien : plafond puis remise à zéro le lendemain", async () =>
   assert.equal((await ai.review(CTX)).ok, true);
 });
 
-test("au plus quatre appels simultanés", async () => {
+// Lance `n` relectures en même temps et renvoie le plus grand nombre d'appels simultanés observé.
+async function peakConcurrency(env, n) {
   let running = 0;
   let peak = 0;
   const http = {
@@ -259,10 +260,26 @@ test("au plus quatre appels simultanés", async () => {
       return reply(GOOD);
     },
   };
-  const ai = createAi({ config: loadConfig({ ANTHROPIC_API_KEY: "k" }), http, log: quiet });
-  const results = await Promise.all(Array.from({ length: 10 }, () => ai.review(CTX)));
+  const ai = createAi({ config: loadConfig({ ANTHROPIC_API_KEY: "k", ...env }), http, log: quiet });
+  const results = await Promise.all(Array.from({ length: n }, () => ai.review(CTX)));
   assert.ok(results.every((r) => r.ok));
-  assert.ok(peak <= 4 && peak >= 2, `pic = ${peak}`);
+  return { peak, status: ai.status() };
+}
+
+test("par défaut, au plus six appels simultanés (un coupon de 12 paris : deux vagues)", async () => {
+  const { peak, status } = await peakConcurrency({}, 14);
+  assert.ok(peak <= 6 && peak >= 4, `pic = ${peak}`);
+  assert.equal(status.appelsSimultanes, 6);
+});
+
+test("AI_MAX_PARALLEL règle le nombre d'appels simultanés, borné de 1 à 12", async () => {
+  assert.equal((await peakConcurrency({ AI_MAX_PARALLEL: "2" }, 8)).peak, 2);
+  assert.equal((await peakConcurrency({ AI_MAX_PARALLEL: "1" }, 4)).peak, 1);
+  const wide = await peakConcurrency({ AI_MAX_PARALLEL: "50" }, 20);
+  assert.ok(wide.peak <= 12 && wide.peak >= 8, `pic = ${wide.peak}`);
+  assert.equal(wide.status.appelsSimultanes, 12);
+  assert.equal((await peakConcurrency({ AI_MAX_PARALLEL: "0" }, 3)).status.appelsSimultanes, 1);
+  assert.equal((await peakConcurrency({ AI_MAX_PARALLEL: "n'importe quoi" }, 3)).status.appelsSimultanes, 6);
 });
 
 test("avec le vrai client HTTP : adresse, en-têtes et corps JSON conformes", async () => {

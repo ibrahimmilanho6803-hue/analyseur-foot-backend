@@ -109,11 +109,17 @@ function createAnalysis({ config, data, ai, now = Date.now, log = console }) {
     const found1 = Boolean(a.team);
     const found2 = Boolean(b.team);
     if (!found1 || !found2) {
+      // Les deux clubs sont introuvables alors que des championnats ne sont pas encore chargés (démarrage du serveur) : ils sont
+      // peut-être dans l'un d'eux. Dire « équipe introuvable » serait faux ; il suffit de réessayer dans un instant.
+      // Si un des clubs est trouvé, la recherche du second se limite à son championnat, déjà chargé : la réponse est définitive.
+      const unloaded = !found1 && !found2 ? data.unloadedLeagues() : [];
+      if (unloaded.some((l) => l.etat === "chargement")) return { state: "chargement", found1, found2 };
       const suggestions = {};
       if (!found1) suggestions.equipe1 = a.alternatives || [];
       if (!found2) suggestions.equipe2 = b.alternatives || [];
       const ambiguous = (!found1 && a.ambiguous) || (!found2 && b.ambiguous);
-      return { state: ambiguous ? "ambigu" : "equipe_inconnue", found1, found2, suggestions };
+      // Des championnats en panne : on le dit, car le club cherché est peut-être dans l'un d'eux.
+      return { state: ambiguous ? "ambigu" : "equipe_inconnue", found1, found2, suggestions, indisponibles: unloaded.map((l) => l.nom) };
     }
     if (a.team.id === b.team.id) return { state: "meme_equipe", found1, found2 };
     if (a.team.leagueKey !== b.team.leagueKey) return { state: "ligues_differentes", found1, found2, home: a.team, away: b.team };
@@ -140,18 +146,21 @@ function createAnalysis({ config, data, ai, now = Date.now, log = console }) {
     ...extra,
   });
 
+  // Réponse « analyse impossible » pour un résultat de resolveTeams qui n'est pas « ok ».
+  const unresolvedFrom = (r) =>
+    unresolved(r.state, {
+      equipesTrouvees1: Boolean(r.found1),
+      equipesTrouvees2: Boolean(r.found2),
+      suggestions: r.suggestions,
+      ...(r.state === "ligues_differentes" ? { equipe1: r.home.name, equipe2: r.away.name } : {}),
+      ...(r.indisponibles && r.indisponibles.length ? { message: `${MESSAGES[r.state]} Données momentanément indisponibles pour : ${r.indisponibles.join(", ")}.` } : {}),
+    });
+
   // ---------- Analyse d'une sélection (équipe 1 à domicile contre équipe 2) ----------
   async function analyzeLeg({ equipe1, equipe2, typePari }, { withAi = true, aiTimeoutMs = 25000, shift = 0 } = {}) {
     const market = resolveMarket(typePari);
     const r = resolveTeams(equipe1, equipe2);
-    if (r.state !== "ok") {
-      return unresolved(r.state, {
-        equipesTrouvees1: Boolean(r.found1),
-        equipesTrouvees2: Boolean(r.found2),
-        suggestions: r.suggestions,
-        ...(r.state === "ligues_differentes" ? { equipe1: r.home.name, equipe2: r.away.name } : {}),
-      });
-    }
+    if (r.state !== "ok") return unresolvedFrom(r);
     if (!market) {
       return unresolved("marche_inconnu", {
         equipesTrouvees1: true,
@@ -173,7 +182,7 @@ function createAnalysis({ config, data, ai, now = Date.now, log = console }) {
     const pCal = exact ? pModel : clamp(pModel + shift, 0.01, 0.99);
     const bet = { label: market.label, p: pCal };
 
-    let ia = { statut: "desactivee" };
+    let ia = { statut: !withAi && ai.enabled ? "non_demandee" : "desactivee" };
     let review = null;
     if (withAi && !exact) {
       const ctx = {
@@ -241,7 +250,7 @@ function createAnalysis({ config, data, ai, now = Date.now, log = console }) {
     );
   }
 
-  return { analyzeLeg, analyzeLegs, loadAll, computeCore, resolveTeams, reviewWithAi, aiPublic, finalProbability, confidence, modelJustification, calibration, setPickShift, helpers: { pct1, dec, unresolved } };
+  return { analyzeLeg, analyzeLegs, loadAll, computeCore, resolveTeams, reviewWithAi, aiPublic, finalProbability, confidence, modelJustification, calibration, setPickShift, helpers: { pct1, dec, unresolved, unresolvedFrom } };
 }
 
 module.exports = { createAnalysis, WARNING_ODDS };

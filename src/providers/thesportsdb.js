@@ -5,6 +5,9 @@
 // payante renvoie la saison complète. On détecte ce cas et on le signale.
 const BASE = "https://www.thesportsdb.com/api/v1/json";
 const GAP_MS = 2100;
+// Au-delà de la limite de l'offre (30 requêtes par minute en gratuit, 100 en Premium), le service répond 429 et refuse tout
+// pendant environ une minute : on le laisse tranquille un peu plus longtemps que cela.
+const COOL_MS = 61000;
 
 function parseKickoff(e) {
   const ts = e.strTimestamp;
@@ -81,7 +84,7 @@ function createTheSportsDb({ http, key, now = Date.now, gapMs = GAP_MS }) {
       const names = league.style === "calendar" ? [`${startYear}`, `${startYear}-${startYear + 1}`] : [`${startYear}-${startYear + 1}`];
       for (const s of names) {
         const url = `${BASE}/${key}/eventsseason.php?id=${league.tsdb}&s=${s}`;
-        const data = await http.getJson(url, { throttleKey: "thesportsdb", minIntervalMs: gapMs, timeoutMs: 25000 });
+        const data = await http.getJson(url, { throttleKey: "thesportsdb", minIntervalMs: gapMs, rateLimitCoolMs: COOL_MS, timeoutMs: 25000 });
         const events = Array.isArray(data && data.events) ? data.events : [];
         if (!events.length) continue;
         const nowMs = now();
@@ -104,7 +107,7 @@ function createTheSportsDb({ http, key, now = Date.now, gapMs = GAP_MS }) {
       let lastError = null;
       for (const url of urls) {
         try {
-          const data = await http.getJson(url, { throttleKey: "thesportsdb", minIntervalMs: gapMs, timeoutMs: 25000, retries: 1 });
+          const data = await http.getJson(url, { throttleKey: "thesportsdb", minIntervalMs: gapMs, rateLimitCoolMs: COOL_MS, timeoutMs: 25000, retries: 1 });
           const rows = (Array.isArray(data && data.teams) ? data.teams : []).filter((t) => t && t.idTeam && inLeague(t, league));
           if (rows.length) return rows.map(toTeam);
         } catch (e) {

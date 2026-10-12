@@ -88,3 +88,53 @@ test("réglage automatique : sans données suffisantes, le réglage actuel est c
   assert.deepEqual(t.retenu, { halfLifeDays: 300, priorMatches: 10 });
   assert.deepEqual(t.candidats, []);
 });
+
+test("rapport : pente de calibration, buts par match prévus et réels, réglages utilisés", () => {
+  const r = runBacktest(leagues, OPTS);
+  assert.ok(r.butsParMatch.prevus > 1);
+  assert.ok(Math.abs(r.butsParMatch.prevus / r.butsParMatch.reels - 1) < 0.06, JSON.stringify(r.butsParMatch));
+  for (const m of r.marches) assert.ok(Number.isFinite(m.pente), m.marche);
+  const home = r.marches.find((m) => m.marche === "Victoire domicile");
+  assert.ok(home.pente > 0.7 && home.pente < 1.3, `pente ${home.pente}`);
+  assert.ok(r.parChampionnat.every((c) => c.butsPrevus > 0 && c.butsReels > 0));
+  assert.equal(r.parametres.modele.demiVieJours, 300);
+  assert.equal(r.parametres.modele.niveauDemiVieJours, null);
+  assert.equal(r.parametres.modele.coefficientDeNiveau, 1);
+});
+
+// Championnats dont le nombre de buts monte nettement sur les derniers mois (le modèle à longue mémoire est alors en retard).
+function hotterLeagues(factor, lastDays) {
+  return [1, 2, 3, 4, 5].map((seed) => {
+    const sim = simulateLeague({ teams: 18, seasons: 4, seed });
+    const rand = mulberry32(seed * 31 + 7);
+    const cut = sim.now - lastDays * DAY;
+    const finished = sim.matches.map((m) => {
+      if (m.kickoff < cut) return m;
+      const h = sim.truth.get(m.home.id);
+      const a = sim.truth.get(m.away.id);
+      return { ...m, hg: poissonSample(factor * sim.base * sim.home * h.a * a.d, rand), ag: poissonSample(factor * sim.base * a.a * h.d, rand) };
+    });
+    return { key: `HOT${seed}`, finished };
+  });
+}
+
+test("niveau de buts : une hausse récente est mieux suivie avec une mémoire courte, et « plus de 2.5 buts » est moins biaisé", () => {
+  const hot = hotterLeagues(1.25, 150);
+  const opts = { now: NOW, evalDays: 120, stepDays: 14, model: { halfLifeDays: 500, priorMatches: 4 } };
+  const plain = runBacktest(hot, opts);
+  const quick = runBacktest(hot, { ...opts, model: { ...opts.model, levelHalfLifeDays: 60, levelPriorMatches: 20 } });
+  const gap = (r) => 1 - r.butsParMatch.prevus / r.butsParMatch.reels;
+  assert.ok(gap(plain) > 0.1, `retard sans réglage : ${gap(plain)}`);
+  assert.ok(gap(quick) < 0.8 * gap(plain), `retard avec réglage : ${gap(quick)} contre ${gap(plain)}`);
+  const over = (r) => r.marches.find((m) => m.marche === "Plus de 2.5 buts");
+  const bias = (r) => Math.abs(over(r).frequenceReelle - over(r).probabiliteMoyenne);
+  assert.ok(bias(quick) < bias(plain), `biais ${bias(quick)} contre ${bias(plain)}`);
+  assert.ok(over(quick).brierModele < over(plain).brierModele);
+  assert.equal(quick.parametres.modele.niveauDemiVieJours, 60);
+});
+
+test("niveau de buts : sans hausse, la mémoire courte ne dégrade pas le résultat 1-N-2", () => {
+  const plain = runBacktest(leagues, OPTS);
+  const quick = runBacktest(leagues, { ...OPTS, model: { levelHalfLifeDays: 90, levelPriorMatches: 40 } });
+  assert.ok(quick.resultat1N2.brierModele < plain.resultat1N2.brierModele * 1.01, `${quick.resultat1N2.brierModele} contre ${plain.resultat1N2.brierModele}`);
+});

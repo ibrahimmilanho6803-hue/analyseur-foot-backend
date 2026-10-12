@@ -7,7 +7,15 @@ const { createLimiter } = require("./ratelimit");
 const { runBacktestAsync } = require("./backtest");
 const { SwrCache } = require("./cache");
 const { LEAGUES } = require("./leagues");
+const { spellingsOf } = require("./teams");
 const { version: VERSION } = require("../package.json");
+
+// Nombre optionnel lu dans l'adresse : absent ou illisible = undefined, sinon borné.
+const optNum = (v, lo, hi) => {
+  if (v === undefined || v === null || v === "") return undefined;
+  const n = Number(v);
+  return Number.isFinite(n) ? clamp(n, lo, hi) : undefined;
+};
 
 const cleanText = (v, max) => (typeof v === "string" ? v.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, max) : "");
 
@@ -66,6 +74,21 @@ function createApp({ config, data, ai, analysis, coupons, tuner = null, now = Da
     res.json({ championnats: LEAGUES.map((l) => ({ key: l.key, nom: l.name, pays: l.country, couvert: covered.has(l.key) })) });
   });
 
+  // Clubs connus et leurs écritures courantes (« PSG », « Man City »…) : sert aux suggestions pendant la saisie sur le site.
+  // « complet » reste faux tant qu'un championnat n'est pas chargé : le site ne garde alors cette liste que quelques minutes.
+  app.get("/api/teams", (req, res) => {
+    const teams = data.allTeams();
+    const loaded = new Set(teams.map((t) => t.leagueKey));
+    const equipes = teams.map((t) => ({ nom: t.name, championnat: t.leagueKey, noms: spellingsOf(t) })).sort((a, b) => a.nom.localeCompare(b.nom, "fr"));
+    res.set("Cache-Control", "public, max-age=300");
+    res.json({
+      genereLe: new Date(now()).toISOString(),
+      complet: data.leagues.every((l) => loaded.has(l.key)),
+      championnats: data.leagues.map((l) => ({ key: l.key, nom: l.name, pays: l.country, charge: loaded.has(l.key) })),
+      equipes,
+    });
+  });
+
   app.get("/api/status", (req, res) => {
     const avertissements = [];
     if (!config.providers.order.length) avertissements.push("Aucune source de données configurée : ajoutez FOOTBALL_DATA_API_KEY (offre gratuite de football-data.org).");
@@ -110,8 +133,11 @@ function createApp({ config, data, ai, analysis, coupons, tuner = null, now = Da
       }
       const legs = rawLegs.map(readLeg);
       if (legs.some((l) => !l)) return res.status(400).json({ error: "Chaque sélection doit contenir equipe1 et equipe2 (texte)." });
-      if (!consume(aiLimit, req, res, legs.length)) return undefined;
-      const results = await analysis.analyzeLegs(legs);
+      // `ia: false` : réponse rapide du seul modèle statistique (aucun appel à l'IA, donc pas de quota IA consommé). Le site peut
+      // l'afficher tout de suite, puis relancer la même demande avec l'IA pour la relecture.
+      const withAi = body.ia !== false;
+      if (withAi && !consume(aiLimit, req, res, legs.length)) return undefined;
+      const results = await analysis.analyzeLegs(legs, { withAi });
       return res.json(batch ? { legs: results } : results[0]);
     } catch (e) {
       return next(e);
@@ -144,14 +170,29 @@ function createApp({ config, data, ai, analysis, coupons, tuner = null, now = Da
   });
 
   // ---- Contrôle de fiabilité sur les matchs récents ----
+  // Paramètres facultatifs (lecture seule, sans effet sur les réponses du serveur) : `pas` (jours entre deux ré-ajustements) et des réglages
+  // d'essai du modèle, pour comparer plusieurs réglages sur exactement les mêmes matchs : demiVie, prior, rho, niveauDemiVie, niveauPrior,
+  // exposant, echelle (voir model.js).
   app.get("/api/backtest", async (req, res, next) => {
     try {
       if (!consume(heavy, req, res)) return undefined;
       const jours = clamp(parseInt(req.query.jours, 10) || 120, 30, 365);
+      const pas = Math.round(optNum(req.query.pas, 3, 28) ?? 7);
       const wanted = typeof req.query.championnat === "string" ? req.query.championnat.toUpperCase().slice(0, 4) : "";
       const keys = wanted ? data.leagues.filter((l) => l.key === wanted).map((l) => l.key) : data.leagues.map((l) => l.key);
       if (!keys.length) return res.status(404).json({ error: "Championnat inconnu ou non couvert." });
-      const report = await backtestCache.get(`${jours}:${keys.join(",")}`, {
+      const essai = {};
+      const put = (name, value) => {
+        if (value !== undefined) essai[name] = value;
+      };
+      put("halfLifeDays", optNum(req.query.demiVie, 30, 1500));
+      put("priorMatches", optNum(req.query.prior, 0, 60));
+      put("rho", optNum(req.query.rho, -0.3, 0.1));
+      put("levelHalfLifeDays", optNum(req.query.niveauDemiVie, 0, 1500));
+      put("levelPriorMatches", optNum(req.query.niveauPrior, 0, 400));
+      put("strengthExponent", optNum(req.query.exposant, 0.3, 1.3));
+      put("levelFactor", optNum(req.query.echelle, 0.8, 1.3));
+      const report = await backtestCache.get(`${jours}:${pas}:${keys.join(",")}:${JSON.stringify(essai)}`, {
         ttlMs: 6 * 3600000,
         errorTtlMs: 60000,
         loader: async () => {
@@ -159,9 +200,9 @@ function createApp({ config, data, ai, analysis, coupons, tuner = null, now = Da
           if (!ready.length) throw Object.assign(new Error("Aucune donnée disponible pour le moment."), { code: "NO_DATA" });
           const r = await runBacktestAsync(
             ready.map((d) => ({ key: d.league.key, finished: d.finished })),
-            { now: now(), evalDays: jours, stepDays: 7, model: { ...config.model, ...data.getModelParams() } }
+            { now: now(), evalDays: jours, stepDays: pas, model: { ...config.model, ...data.getModelParams(), ...essai } }
           );
-          return { genereLe: new Date(now()).toISOString(), reglages: data.getModelParams(), ...r };
+          return { genereLe: new Date(now()).toISOString(), reglages: data.getModelParams(), ...(Object.keys(essai).length ? { essai } : {}), ...r };
         },
       });
       return res.json(report);

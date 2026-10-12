@@ -68,6 +68,7 @@ test("football-data : appel de la bonne adresse avec la clé en en-tête", async
   assert.equal(http.calls[0].url, "https://api.football-data.org/v4/competitions/PL/matches?season=2026");
   assert.equal(http.calls[0].opts.headers["X-Auth-Token"], "CLE-TEST");
   assert.equal(http.calls[0].opts.throttleKey, "footballdata");
+  assert.ok(http.calls[0].opts.rateLimitCoolMs >= 60000, "une pause d'environ une minute après un refus « trop de requêtes »");
   assert.equal(out.matches.length, 1, "le match illisible est ignoré");
   assert.equal(out.limited, false);
 });
@@ -137,6 +138,7 @@ test("TheSportsDB : adresse, nom de saison et repli pour les championnats sur l'
   await createTheSportsDb({ http: split, key: "KEY", now: () => NOW }).fetchSeason(byKey.get("PL"), 2026);
   assert.equal(split.calls.length, 1);
   assert.equal(split.calls[0].url, "https://www.thesportsdb.com/api/v1/json/KEY/eventsseason.php?id=4328&s=2026-2027");
+  assert.ok(split.calls[0].opts.rateLimitCoolMs >= 60000, "pause d'environ une minute après un refus « trop de requêtes »");
 
   const cal = fakeHttp([{ events: null }, { events: [] }]);
   const out = await createTheSportsDb({ http: cal, key: "KEY", now: () => NOW }).fetchSeason(byKey.get("BSA"), 2026);
@@ -171,6 +173,7 @@ test("TheSportsDB : les noms alternatifs d'un championnat sont cherchés par nom
   assert.equal(http.calls.length, 1, "une seule requête suffit quand la première répond");
   assert.equal(http.calls[0].url, "https://www.thesportsdb.com/api/v1/json/KEY/search_all_teams.php?l=French%20Ligue%201");
   assert.equal(http.calls[0].opts.throttleKey, "thesportsdb", "même cadence que les matchs : la limite de l'offre est respectée");
+  assert.ok(http.calls[0].opts.rateLimitCoolMs >= 60000, "même pause que les matchs après un refus « trop de requêtes »");
   assert.deepEqual(out, [
     { id: "ts:133714", name: "Paris SG", aliases: ["Paris Saint-Germain", "Paris Saint Germain", "PSG"] },
     { id: "ts:133707", name: "Marseille", aliases: ["Olympique de Marseille", "OM"] },

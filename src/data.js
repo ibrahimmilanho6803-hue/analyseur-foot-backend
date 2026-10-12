@@ -152,6 +152,13 @@ function createDataService({ config, http, cache = new SwrCache(), now = Date.no
     return leagues.length > 0 && leagues.every((l) => !cache.peek(`league:${l.key}`) && Boolean(cache.peekError(`league:${l.key}`)));
   }
 
+  // Championnats couverts dont les données ne sont pas en mémoire : « chargement » (pas encore terminé) ou « echec » (dernier essai raté).
+  function unloadedLeagues() {
+    return leagues
+      .filter((l) => !cache.peek(`league:${l.key}`))
+      .map((l) => ({ key: l.key, nom: l.name, etat: cache.peekError(`league:${l.key}`) ? "echec" : "chargement" }));
+  }
+
   function allTeams() {
     const out = [];
     for (const l of leagues) {
@@ -211,7 +218,7 @@ function createDataService({ config, http, cache = new SwrCache(), now = Date.no
 
   const getModelParams = () => ({ ...modelParams });
 
-  return { leagues, getLeagueData, ensureAll, allTeams, allFailed, warmUp, status, providers: list, setModelParams, getModelParams };
+  return { leagues, getLeagueData, ensureAll, allTeams, allFailed, unloadedLeagues, warmUp, status, providers: list, setModelParams, getModelParams };
 }
 
 module.exports = { createDataService, explain };

@@ -2,7 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { findTeam, canon, coreOf } = require("../src/teams");
+const { findTeam, canon, coreOf, spellingsOf } = require("../src/teams");
 const { GROUPS } = require("../src/team-groups");
 const { pool } = require("./fixtures/thesportsdb-teams");
 
@@ -316,4 +316,26 @@ test("fautes de frappe : acceptées sur les noms longs, jamais sur les noms cour
   const sansAngers = TEAMS.filter((t) => t.name !== "Angers");
   assert.equal(name("Angers", sansAngers), null);
   assert.equal(name("Lens", TEAMS.filter((t) => t.name !== "Lens")), null);
+});
+
+test("liste des écritures proposées au site : sans le nom officiel, sans doublon, et chacune désigne bien son club", () => {
+  let total = 0;
+  for (const t of WITH_ALT) {
+    const list = spellingsOf(t);
+    assert.ok(list.length <= 16, t.name);
+    const keys = new Set([coreOf(t.name)]);
+    for (const text of list) {
+      assert.ok(!keys.has(coreOf(text) || canon(text)), `${t.name} : « ${text} » est un doublon`);
+      keys.add(coreOf(text) || canon(text));
+      const r = findTeam(text, WITH_ALT, { leagueKey: t.leagueKey });
+      // Une écriture proposée pour un club ne doit jamais faire reconnaître un autre club du même championnat.
+      assert.ok(r.team ? r.team.id === t.id : r.ambiguous, `${t.name} : « ${text} » désigne ${r.team ? r.team.name : "personne"}`);
+      total += 1;
+    }
+  }
+  assert.ok(total > 120, `${total} écritures`);
+  const psg = WITH_ALT.find((t) => t.name === "Paris SG");
+  assert.ok(spellingsOf(psg).includes("PSG"), JSON.stringify(spellingsOf(psg)));
+  const bayern = WITH_ALT.find((t) => t.name === "Bayern Munich");
+  assert.ok(spellingsOf(bayern).includes("FC Bayern München"));
 });

@@ -4,6 +4,7 @@
 // Un seul appel par championnat et par saison renvoie tous les matchs, joués ou à venir.
 const BASE = "https://api.football-data.org/v4";
 const GAP_MS = 6500;
+const COOL_MS = 62000; // limite de 10 requêtes par minute dépassée : le service refuse tout pendant environ une minute
 
 function normalize(m) {
   const home = m && m.homeTeam;
@@ -39,6 +40,7 @@ function createFootballData({ http, key, gapMs = GAP_MS }) {
         headers: { "X-Auth-Token": key },
         throttleKey: "footballdata",
         minIntervalMs: gapMs,
+        rateLimitCoolMs: COOL_MS,
         timeoutMs: 25000,
       });
       const matches = (Array.isArray(data && data.matches) ? data.matches : []).map(normalize).filter(Boolean);
