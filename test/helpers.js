@@ -25,12 +25,14 @@ function poissonSample(lambda, rand) {
 
 const DAY = 86400000;
 
-// Championnat fictif : chaque équipe a une force d'attaque et de défense connue.
-function simulateLeague({ teams = 12, seasons = 3, seed = 7, base = 1.25, home = 1.3, now = Date.UTC(2026, 9, 8) } = {}) {
+// Championnat fictif : chaque équipe a une force d'attaque et de défense connue (makeTeam la tire au hasard).
+const randomTeam = (rand) => ({ a: 0.7 + rand() * 0.7, d: 0.75 + rand() * 0.55 });
+
+function simulateLeague({ teams = 12, seasons = 3, seed = 7, base = 1.25, home = 1.3, now = Date.UTC(2026, 9, 8), makeTeam = randomTeam } = {}) {
   const rand = mulberry32(seed);
   const truth = new Map();
   for (let i = 0; i < teams; i++) {
-    truth.set(`T${i}`, { a: 0.7 + rand() * 0.7, d: 0.75 + rand() * 0.55 });
+    truth.set(`T${i}`, makeTeam(rand));
   }
   const ids = [...truth.keys()];
   const matches = [];

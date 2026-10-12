@@ -19,8 +19,15 @@ const EVAL_LABELS = [
   "Plus de 1.5 buts",
   "Plus de 2.5 buts",
   "Les deux équipes marquent",
+  // Marchés ajoutés pour vérifier qu'un réglage du modèle n'en abîme pas d'autres (totaux élevés, buts de chaque équipe).
+  "Plus de 3.5 buts",
+  "Equipe domicile 0.5 buts plus",
+  "Equipe extérieur 0.5 buts plus",
+  "Equipe domicile 1.5 buts plus",
+  "Equipe extérieur 1.5 buts plus",
 ];
 const EVAL = EVAL_LABELS.map((label) => MARKETS.find((m) => m.label === label));
+const BINNED = 8; // seuls les 8 premiers marchés alimentent les tranches de calibration (comparables aux anciens contrôles)
 const EPS = 1e-4;
 const logLoss = (p, y) => -(y ? Math.log(Math.max(EPS, p)) : Math.log(Math.max(EPS, 1 - p)));
 
@@ -30,7 +37,7 @@ function newAcc() {
     first: Infinity,
     last: -Infinity,
     markets: EVAL.map(() => ({ n: 0, bm: 0, br: 0, lm: 0, lr: 0, sp: 0, sy: 0, sp2: 0, spy: 0 })),
-    goals: { n: 0, pred: 0, real: 0 },
+    goals: { n: 0, pred: 0, real: 0, real2: 0 },
     bins: Array.from({ length: 10 }, () => ({ n: 0, sp: 0, sy: 0 })),
     x12: { n: 0, bm: 0, br: 0 },
     picks: { n: 0, hits: 0, sp: 0 },
@@ -54,6 +61,8 @@ function runLeague(acc, key, finished, opts) {
       levelHalfLifeDays: model.levelHalfLifeDays,
       levelPriorMatches: model.levelPriorMatches,
       strengthExponent: model.strengthExponent,
+      qualityExponent: model.qualityExponent,
+      rhythmExponent: model.rhythmExponent,
       levelFactor: model.levelFactor,
     });
     const ref = EVAL.map((mk) => train.filter((m) => mk.test(m.hg, m.ag)).length / train.length);
@@ -66,6 +75,7 @@ function runLeague(acc, key, finished, opts) {
       acc.goals.n++;
       acc.goals.pred += lh + la;
       acc.goals.real += m.hg + m.ag;
+      acc.goals.real2 += (m.hg + m.ag) ** 2;
       local.goalsPred += lh + la;
       local.goalsReal += m.hg + m.ag;
       acc.first = Math.min(acc.first, m.kickoff);
@@ -83,10 +93,12 @@ function runLeague(acc, key, finished, opts) {
         a.sy += y;
         a.sp2 += p * p;
         a.spy += p * y;
-        const bin = acc.bins[Math.min(9, Math.floor(p * 10))];
-        bin.n++;
-        bin.sp += p;
-        bin.sy += y;
+        if (i < BINNED) {
+          const bin = acc.bins[Math.min(9, Math.floor(p * 10))];
+          bin.n++;
+          bin.sp += p;
+          bin.sy += y;
+        }
       });
       // Résultat 1-N-2 : score de Brier à trois issues.
       const outcome = m.hg > m.ag ? 0 : m.hg === m.ag ? 1 : 2;
@@ -153,6 +165,8 @@ function report(acc, opts) {
         niveauDemiVieJours: opts.model.levelHalfLifeDays || null,
         niveauMatchsAPriori: opts.model.levelHalfLifeDays ? opts.model.levelPriorMatches : null,
         exposantDesForces: opts.model.strengthExponent,
+        exposantForce: opts.model.qualityExponent || null,
+        exposantRythme: opts.model.rhythmExponent || null,
         coefficientDeNiveau: opts.model.levelFactor,
       },
     },
@@ -171,7 +185,14 @@ function report(acc, opts) {
         }
       : null,
     // Buts par match : prévus par le modèle et réellement marqués. Un écart durable fausse « plus de 2.5 buts », « les deux équipes marquent »…
-    butsParMatch: acc.goals.n ? { prevus: round(acc.goals.pred / acc.goals.n, 3), reels: round(acc.goals.real / acc.goals.n, 3) } : null,
+    butsParMatch: acc.goals.n
+      ? {
+          prevus: round(acc.goals.pred / acc.goals.n, 3),
+          reels: round(acc.goals.real / acc.goals.n, 3),
+          // Dispersion des buts réellement marqués : sert à juger si l'écart entre prévus et réels est significatif.
+          ecartTypeReels: round(Math.sqrt(Math.max(0, acc.goals.real2 / acc.goals.n - (acc.goals.real / acc.goals.n) ** 2)), 3),
+        }
+      : null,
     parChampionnat: [...acc.byLeague.entries()].map(([key, v]) => ({
       championnat: key,
       matchs: v.n,

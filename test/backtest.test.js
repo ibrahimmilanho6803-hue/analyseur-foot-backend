@@ -17,7 +17,7 @@ test("le modèle fait mieux que la référence sur des matchs rejoués pas à pa
   assert.ok(r.resultat1N2.brierModele < r.resultat1N2.brierReference);
   // Au moins la moitié des marchés suivis s'améliorent.
   const better = r.marches.filter((m) => m.brierModele < m.brierReference).length;
-  assert.ok(better >= 5, `${better} marchés meilleurs que la référence sur ${r.marches.length}`);
+  assert.ok(better >= Math.ceil(r.marches.length / 2), `${better} marchés meilleurs que la référence sur ${r.marches.length}`);
   assert.match(r.lecture, /fait mieux/);
 });
 
@@ -137,4 +137,39 @@ test("niveau de buts : sans hausse, la mémoire courte ne dégrade pas le résul
   const plain = runBacktest(leagues, OPTS);
   const quick = runBacktest(leagues, { ...OPTS, model: { levelHalfLifeDays: 90, levelPriorMatches: 40 } });
   assert.ok(quick.resultat1N2.brierModele < plain.resultat1N2.brierModele * 1.01, `${quick.resultat1N2.brierModele} contre ${plain.resultat1N2.brierModele}`);
+});
+
+test("rapport : marchés supplémentaires, dispersion des buts, tranches de calibration comparables aux anciens contrôles", () => {
+  const r = runBacktest(leagues, OPTS);
+  const labels = r.marches.map((m) => m.marche);
+  for (const label of ["Plus de 3.5 buts", "Equipe domicile 0.5 buts plus", "Equipe extérieur 0.5 buts plus", "Equipe domicile 1.5 buts plus", "Equipe extérieur 1.5 buts plus"]) {
+    assert.ok(labels.includes(label), label);
+  }
+  assert.deepEqual(labels.slice(0, 8), ["Victoire domicile", "Match nul", "Victoire extérieur", "Victoire ou nul domicile", "Victoire ou nul extérieur", "Plus de 1.5 buts", "Plus de 2.5 buts", "Les deux équipes marquent"]);
+  assert.ok(r.butsParMatch.ecartTypeReels > 1 && r.butsParMatch.ecartTypeReels < 2.5, JSON.stringify(r.butsParMatch));
+  // Seuls les 8 premiers marchés alimentent les tranches de calibration.
+  assert.equal(r.calibration.reduce((s, b) => s + b.matchs, 0), 8 * r.matchsEvalues);
+});
+
+// Championnats où toutes les équipes ont le même rythme réel (seule leur force diffère) : le rythme estimé n'y est que du bruit.
+const constantRhythm = (rand) => {
+  const q = 0.7 + rand() * 0.8;
+  return { a: Math.sqrt(q), d: 1 / Math.sqrt(q) };
+};
+const calmLeagues = [1, 2, 3, 4, 5].map((seed) => ({ key: `CALM${seed}`, finished: simulateLeague({ teams: 18, seasons: 4, seed, makeTeam: constantRhythm }).matches }));
+
+test("rythme : le rapprocher de la moyenne améliore les totaux de buts sans abîmer le 1-N-2, contrairement à un exposant unique", () => {
+  const run = (model) => runBacktest(calmLeagues, { now: NOW, evalDays: 300, stepDays: 14, model: { halfLifeDays: 500, priorMatches: 4, ...model } });
+  const plain = run({});
+  const calm = run({ rhythmExponent: 0.3 });
+  const uniform = run({ strengthExponent: 0.3 });
+  const brier = (r, label) => r.marches.find((m) => m.marche === label).brierModele;
+  for (const label of ["Plus de 1.5 buts", "Plus de 2.5 buts", "Les deux équipes marquent", "Equipe domicile 1.5 buts plus"]) {
+    assert.ok(brier(calm, label) < brier(plain, label), `${label} : ${brier(calm, label)} contre ${brier(plain, label)}`);
+  }
+  assert.ok(calm.resultat1N2.brierModele <= plain.resultat1N2.brierModele * 1.001, `${calm.resultat1N2.brierModele} contre ${plain.resultat1N2.brierModele}`);
+  assert.ok(uniform.resultat1N2.brierModele > plain.resultat1N2.brierModele * 1.01, "un exposant unique rapproche aussi les forces et abîme le 1-N-2");
+  assert.equal(calm.parametres.modele.exposantRythme, 0.3);
+  assert.equal(calm.parametres.modele.exposantForce, null);
+  assert.equal(plain.parametres.modele.exposantRythme, null);
 });

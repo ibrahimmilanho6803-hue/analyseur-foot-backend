@@ -87,7 +87,10 @@ Le serveur rejoue les matchs des derniers mois, semaine par semaine, avec ce qu'
 probabilités à ce qui s'est réellement passé. Pour chaque type de pari, le rapport donne la probabilité moyenne
 annoncée et la fréquence réelle, la note de Brier et la log-perte (comparées à une référence qui ne connaîtrait que la
 fréquence moyenne du championnat) et la **pente de calibrage** (`pente` : 1 = parfait, moins de 1 = probabilités trop
-tranchées). `butsParMatch` compare le total de buts annoncé et réel, par championnat aussi.
+tranchées). `butsParMatch` compare le total de buts annoncé et réel (avec l'écart-type des buts réels), par championnat aussi.
+Les huit premiers marchés (1-N-2, double chance, plus de 1.5 / 2.5 buts, les deux équipes marquent) alimentent aussi les
+tranches de calibrage ; cinq marchés de plus (plus de 3.5 buts, un ou deux buts de chaque équipe) servent à vérifier
+qu'un réglage n'en abîme pas d'autres.
 
 Le rapport est en lecture seule et sans effet sur les réponses du serveur. Pour comparer des réglages **sur exactement les
 mêmes matchs**, ajoutez des paramètres facultatifs (bornés, valeurs illisibles ignorées ; 6 appels par minute au plus,
@@ -99,7 +102,8 @@ résultat gardé 6 h) :
 | `demiVie`, `prior` | Demi-vie des matchs (30 à 1500 jours) et nombre de matchs fictifs ramenant vers la moyenne (0 à 60). |
 | `rho` | Correction de Dixon-Coles sur les petits scores (−0,3 à 0,1). |
 | `niveauDemiVie`, `niveauPrior` | Réestime le niveau de buts du championnat avec une mémoire plus courte que les forces d'équipes (0 = désactivé). |
-| `exposant` | Rapproche les forces des équipes de la moyenne (0,3 à 1,3 ; moins de 1 = moins tranché). |
+| `exposant` | Rapproche toutes les forces des équipes de la moyenne (0,3 à 1,3 ; moins de 1 = moins tranché). |
+| `exposantForce`, `exposantRythme` | Même chose, séparément (0,2 à 1,3) pour deux composantes de chaque équipe : sa **force** (attaque ÷ défense : meilleure ou moins bonne que l'adversaire, ce qui décide du 1-N-2) et son **rythme** (attaque × défense : ses matchs comptent-ils beaucoup de buts, ce qui décide des totaux et de « les deux équipes marquent »). Chacun vaut `exposant` quand il n'est pas précisé. |
 | `echelle` | Coefficient appliqué au niveau de buts (0,8 à 1,3). |
 
 La réponse reprend les réglages essayés (`essai`) et ceux du serveur (`reglages`).
