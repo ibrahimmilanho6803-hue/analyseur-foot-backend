@@ -2,9 +2,9 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { fitLeague, expectedGoals, scoreMatrix, dataQuality } = require("../src/model");
+const { fitLeague, calibrateFit, expectedGoals, scoreMatrix, dataQuality } = require("../src/model");
 const { MARKETS, resolveMarket, evaluate, evaluateAll, baseRate } = require("../src/markets");
-const { simulateLeague, correlation } = require("./helpers");
+const { simulateLeague, correlation, mulberry32, poissonSample, DAY } = require("./helpers");
 
 test("avec beaucoup de données, les buts attendus sont proches des vraies valeurs simulées", () => {
   const sim = simulateLeague({ teams: 12, seasons: 12, seed: 11 });
@@ -113,4 +113,85 @@ test("la qualité des données reflète le nombre de matchs disponibles", () => 
   const unknown = dataQuality(fit, "T0", "INCONNU");
   assert.ok(known.level >= 1);
   assert.equal(unknown.level, 0);
+});
+
+// ---------- Réglages de calibrage du niveau de buts et des forces ----------
+
+const sim = simulateLeague({ teams: 14, seasons: 3, seed: 21 });
+const OPTS = { now: sim.now, halfLifeDays: 500, priorMatches: 4 };
+const totalGoals = (fit, ids) => {
+  let s = 0;
+  for (const i of ids) for (const j of ids) if (i !== j) s += expectedGoals(fit, i, j).lh + expectedGoals(fit, i, j).la;
+  return s;
+};
+
+test("calibrage : des réglages neutres ne changent rien", () => {
+  const plain = fitLeague(sim.matches, OPTS);
+  const neutral = fitLeague(sim.matches, { ...OPTS, strengthExponent: 1, levelHalfLifeDays: 0, levelFactor: 1 });
+  assert.equal(neutral.base, plain.base);
+  assert.equal(neutral.home, plain.home);
+  assert.equal(calibrateFit(plain, {}), plain);
+  for (const [id, t] of plain.teams) assert.deepEqual(neutral.teams.get(id), t);
+});
+
+test("calibrage : le coefficient de niveau multiplie les buts attendus des deux équipes", () => {
+  const plain = fitLeague(sim.matches, OPTS);
+  const up = fitLeague(sim.matches, { ...OPTS, levelFactor: 1.1 });
+  const a = expectedGoals(plain, "T0", "T1");
+  const b = expectedGoals(up, "T0", "T1");
+  assert.ok(Math.abs(b.lh / a.lh - 1.1) < 1e-9);
+  assert.ok(Math.abs(b.la / a.la - 1.1) < 1e-9);
+});
+
+test("calibrage : un exposant inférieur à 1 rapproche les forces de la moyenne sans changer le niveau de buts", () => {
+  const plain = fitLeague(sim.matches, OPTS);
+  const soft = fitLeague(sim.matches, { ...OPTS, strengthExponent: 0.6 });
+  const spread = (fit) => {
+    const logs = [...fit.teams.values()].map((t) => Math.log(t.a));
+    const m = logs.reduce((x, y) => x + y, 0) / logs.length;
+    return logs.reduce((x, y) => x + (y - m) ** 2, 0) / logs.length;
+  };
+  assert.ok(spread(soft) < 0.6 * spread(plain), `${spread(soft)} contre ${spread(plain)}`);
+  const mean = (fit, key) => [...fit.teams.values()].reduce((x, t) => x + t[key], 0) / fit.teams.size;
+  assert.ok(Math.abs(mean(soft, "a") - 1) < 1e-9 && Math.abs(mean(soft, "d") - 1) < 1e-9);
+  // Sur les matchs ajustés, le total de buts attendu reste égal au total observé.
+  let expected = 0;
+  let observed = 0;
+  for (const r of soft.rows) {
+    const th = soft.teams.get(r.h);
+    const ta = soft.teams.get(r.a);
+    expected += r.w * (soft.base * soft.home * th.a * ta.d + soft.base * ta.a * th.d);
+    observed += r.w * (r.hg + r.ag);
+  }
+  assert.ok(Math.abs(expected / observed - 1) < 1e-6, `${expected} contre ${observed}`);
+  // Le classement des équipes ne change pas.
+  const order = (fit) => [...fit.teams.entries()].sort((x, y) => y[1].a - x[1].a).map(([id]) => id).join();
+  assert.equal(order(soft), order(plain));
+});
+
+test("calibrage : le niveau de buts à mémoire courte suit une hausse récente, avec un a priori il reste prudent", () => {
+  const rand = mulberry32(5);
+  const cut = sim.now - 90 * DAY;
+  const hotter = sim.matches.map((m) => {
+    if (m.kickoff < cut) return m;
+    const h = sim.truth.get(m.home.id);
+    const a = sim.truth.get(m.away.id);
+    return { ...m, hg: poissonSample(1.35 * sim.base * sim.home * h.a * a.d, rand), ag: poissonSample(1.35 * sim.base * a.a * h.d, rand) };
+  });
+  const ids = [...sim.truth.keys()];
+  const plain = fitLeague(hotter, OPTS);
+  const quick = fitLeague(hotter, { ...OPTS, levelHalfLifeDays: 45, levelPriorMatches: 10 });
+  const careful = fitLeague(hotter, { ...OPTS, levelHalfLifeDays: 45, levelPriorMatches: 1e6 });
+  const g0 = totalGoals(plain, ids);
+  assert.ok(totalGoals(quick, ids) > 1.08 * g0, `${totalGoals(quick, ids)} contre ${g0}`);
+  assert.ok(Math.abs(totalGoals(careful, ids) / g0 - 1) < 0.01, "un a priori très fort garde le niveau de long terme");
+  // Les forces relatives des équipes ne sont pas touchées.
+  for (const [id, t] of plain.teams) assert.equal(quick.teams.get(id).a, t.a);
+});
+
+test("calibrage : sans match, rien à calibrer (valeurs neutres conservées)", () => {
+  const fit = fitLeague([], { now: Date.now(), levelFactor: 1.2, strengthExponent: 0.8, levelHalfLifeDays: 60 });
+  assert.equal(fit.nMatches, 0);
+  const { lh, la } = expectedGoals(fit, "A", "B");
+  assert.ok(lh > 0.5 && lh < 3 && la > 0.5 && la < 3);
 });

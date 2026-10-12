@@ -11,6 +11,79 @@ const { clamp, DAY_MS } = require("./util");
 
 const NEUTRAL = { a: 1, d: 1, w: 0, n: 0 };
 
+// Équations de vraisemblance exactes pour le niveau de buts (« base ») et l'avantage du terrain (« home »), les forces des équipes
+// étant données. `weightOf(row)` donne le poids de chaque match ; `prior` ajoute un a priori (k matchs fictifs au niveau connu).
+function levelFromRows(rows, teams, weightOf, prior = null) {
+  let sumAway = 0;
+  let sumHome = 0;
+  let expAway = 0;
+  let expHome = 0;
+  for (const r of rows) {
+    const w = weightOf(r);
+    if (!(w > 0)) continue;
+    const th = teams.get(r.h);
+    const ta = teams.get(r.a);
+    sumAway += w * r.ag;
+    sumHome += w * r.hg;
+    expAway += w * ta.a * th.d;
+    expHome += w * th.a * ta.d;
+  }
+  if (prior && prior.k > 0) {
+    sumAway += prior.k * prior.base;
+    expAway += prior.k;
+    sumHome += prior.k * prior.base * prior.home;
+    expHome += prior.k;
+  }
+  const base = sumAway / expAway;
+  return { base, home: sumHome / (base * expHome) };
+}
+
+// Réglages de sortie, appliqués après l'estimation des forces. Tous sont neutres par défaut (le résultat est alors inchangé).
+//  - strengthExponent (< 1) : rapproche les forces de la moyenne, pour corriger des probabilités trop tranchées ;
+//  - levelHalfLifeDays : le niveau de buts du championnat est ré-estimé avec une mémoire plus courte que les forces
+//    (levelPriorMatches matchs fictifs au niveau de long terme évitent de suivre le bruit) ;
+//  - levelFactor : coefficient appliqué au niveau de buts (corrige un biais constant).
+// L'estimation de départ n'est pas modifiée : on peut donc essayer plusieurs réglages sur le même ajustement.
+function calibrateFit(fit, opts = {}) {
+  const s = Number.isFinite(opts.strengthExponent) && opts.strengthExponent > 0 ? opts.strengthExponent : 1;
+  const levelHalfLife = Number.isFinite(opts.levelHalfLifeDays) && opts.levelHalfLifeDays > 0 ? opts.levelHalfLifeDays : 0;
+  const factor = Number.isFinite(opts.levelFactor) && opts.levelFactor > 0 ? opts.levelFactor : 1;
+  if (s === 1 && !levelHalfLife && factor === 1) return fit;
+  if (!fit.rows || !fit.rows.length) return fit;
+  const out = { ...fit };
+
+  if (s !== 1) {
+    const teams = new Map();
+    let sumA = 0;
+    let sumD = 0;
+    for (const [id, t] of fit.teams) {
+      const a = t.a ** s;
+      const d = t.d ** s;
+      teams.set(id, { ...t, a, d });
+      sumA += a;
+      sumD += d;
+    }
+    const meanA = sumA / teams.size;
+    const meanD = sumD / teams.size;
+    for (const t of teams.values()) {
+      t.a /= meanA;
+      t.d /= meanD;
+    }
+    out.teams = teams;
+    Object.assign(out, levelFromRows(fit.rows, teams, (r) => r.w));
+  }
+
+  if (levelHalfLife) {
+    const k = Number.isFinite(opts.levelPriorMatches) ? Math.max(0, opts.levelPriorMatches) : 40;
+    const recent = levelFromRows(fit.rows, out.teams, (r) => 0.5 ** (r.age / levelHalfLife), { k, base: out.base, home: out.home });
+    out.base = recent.base;
+    out.home = recent.home;
+  }
+
+  out.base *= factor;
+  return out;
+}
+
 function fitLeague(matches, opts = {}) {
   const { now = Date.now(), halfLifeDays = 150, priorMatches = 4, priorFor = () => ({ a0: 1, d0: 1 }), iterations = 60 } = opts;
   const rows = [];
@@ -24,7 +97,7 @@ function fitLeague(matches, opts = {}) {
     const ageDays = Math.max(0, (now - m.kickoff) / DAY_MS);
     const w = 0.5 ** (ageDays / halfLifeDays);
     if (w < 1e-4) continue;
-    rows.push({ h: m.home.id, a: m.away.id, hg: m.hg, ag: m.ag, w });
+    rows.push({ h: m.home.id, a: m.away.id, hg: m.hg, ag: m.ag, w, age: ageDays });
     const th = ensure(m.home.id);
     const ta = ensure(m.away.id);
     th.w += w;
@@ -76,23 +149,10 @@ function fitLeague(matches, opts = {}) {
       t.d /= mD;
     }
     // Base et avantage du terrain : équations de vraisemblance exactes.
-    let sumAway = 0;
-    let sumHome = 0;
-    let expAway = 0;
-    let expHome = 0;
-    for (const r of rows) {
-      const th = teams.get(r.h);
-      const ta = teams.get(r.a);
-      sumAway += r.w * r.ag;
-      sumHome += r.w * r.hg;
-      expAway += r.w * ta.a * th.d;
-      expHome += r.w * th.a * ta.d;
-    }
-    base = sumAway / expAway;
-    home = sumHome / (base * expHome);
+    ({ base, home } = levelFromRows(rows, teams, (r) => r.w));
     if (maxDelta < 1e-6 && it > 3) break;
   }
-  return { teams, base, home, nMatches: rows.length, wTotal };
+  return calibrateFit({ teams, base, home, nMatches: rows.length, wTotal, rows }, opts);
 }
 
 function expectedGoals(fit, homeId, awayId) {
@@ -138,4 +198,4 @@ function dataQuality(fit, homeId, awayId) {
   return { weakest, level: weakest >= 12 ? 2 : weakest >= 6 ? 1 : 0, nHome: th.n, nAway: ta.n };
 }
 
-module.exports = { fitLeague, expectedGoals, scoreMatrix, dataQuality };
+module.exports = { fitLeague, calibrateFit, expectedGoals, scoreMatrix, dataQuality };

@@ -12,7 +12,7 @@ const SAFETY = 1.02; // marge sur l'objectif de cote, pour absorber la petite co
 function createCoupons({ config, data, analysis, now = Date.now, log = console }) {
   const top = config.top;
   const { computeCore, reviewWithAi, aiPublic, finalProbability, confidence, modelJustification } = analysis;
-  const { pct1, unresolved } = analysis.helpers;
+  const { pct1, unresolved, unresolvedFrom } = analysis.helpers;
 
   // Matchs à venir de tous les championnats prêts, avec leurs paris candidats.
   function gather(ready, nowMs, hours, minLevel, shift) {
@@ -176,9 +176,7 @@ function createCoupons({ config, data, analysis, now = Date.now, log = console }
       matches.map(async (m, index) => {
         try {
           const r = analysis.resolveTeams(m.equipe1, m.equipe2);
-          if (r.state !== "ok") {
-            return { index, ...unresolved(r.state, { equipesTrouvees1: Boolean(r.found1), equipesTrouvees2: Boolean(r.found2), suggestions: r.suggestions }) };
-          }
+          if (r.state !== "ok") return { index, ...unresolvedFrom(r) };
           const ld = await data.getLeagueData(r.leagueKey);
           const core = computeCore(ld, r.home.id, r.away.id);
           const shift = analysis.calibration.pickShift;

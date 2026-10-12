@@ -139,7 +139,7 @@ function createAi({ config, http, now = Date.now, log = console }) {
   const effort = ["low", "medium", "high"].includes(cfg.effort) ? cfg.effort : "medium";
   const state = { variant: 0, day: "", used: 0, failures: 0, openUntil: 0, lastError: null, lastOkAt: 0, running: 0 };
   const queue = [];
-  const MAX_PARALLEL = 4;
+  const MAX_PARALLEL = Math.max(1, Math.round(cfg.maxParallel || 4));
 
   const today = () => new Date(now()).toISOString().slice(0, 10);
   const fail = (code, message) => ({ ok: false, code, message });
@@ -262,6 +262,7 @@ function createAi({ config, http, now = Date.now, log = console }) {
       formeDeRequete: state.variant,
       appelsAujourdhui: state.day === today() ? state.used : 0,
       budgetJournalier: cfg.dailyBudget,
+      appelsSimultanes: MAX_PARALLEL,
       pauseJusquA: now() < state.openUntil ? new Date(state.openUntil).toISOString() : null,
       derniereErreur: state.lastError ? { code: state.lastError.code, message: state.lastError.message, le: new Date(state.lastError.at).toISOString() } : null,
       dernierSucces: state.lastOkAt ? new Date(state.lastOkAt).toISOString() : null,

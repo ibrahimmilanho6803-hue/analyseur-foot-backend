@@ -14,17 +14,40 @@ class HttpError extends Error {
   }
 }
 
+// Durée maximale d'une pause après « trop de requêtes » (429) : au-delà, mieux vaut échouer et laisser le cache reprendre plus tard.
+const MAX_COOL_MS = 90000;
+
 // Client HTTP JSON : délai maximal, reprises sur erreurs temporaires, cadence
-// minimale par service (pour respecter les limites des offres gratuites).
+// minimale par service (pour respecter les limites des offres gratuites) et pause générale d'un service
+// qui répond « trop de requêtes » (429) : tant qu'elle dure, aucun appel vers ce service ne part.
 function createHttp({ fetchImpl = globalThis.fetch, sleepImpl = sleep, now = Date.now } = {}) {
   const nextSlot = new Map();
+  const coolUntil = new Map();
 
   async function throttle(key, gapMs) {
-    if (!key || !gapMs) return;
-    const t = now();
-    const start = Math.max(t, nextSlot.get(key) || 0);
-    nextSlot.set(key, start + gapMs);
-    if (start > t) await sleepImpl(start - t);
+    if (!key) return;
+    // Un appel qui attendait son tour pendant qu'un autre se heurtait à la limite se replace derrière la pause :
+    // sans cela, tous les appels déjà planifiés partiraient pendant le blocage et le prolongeraient.
+    for (let i = 0; i < 5; i++) {
+      const t = now();
+      const start = Math.max(t, nextSlot.get(key) || 0, coolUntil.get(key) || 0);
+      nextSlot.set(key, start + (gapMs || 0));
+      if (start > t) await sleepImpl(start - t);
+      if ((coolUntil.get(key) || 0) <= now()) return;
+    }
+  }
+
+  // Un service qui répond 429 est laissé tranquille : Retry-After s'il l'indique, sinon la durée habituelle de son blocage.
+  function coolDown(key, header, defaultMs) {
+    const ms = Math.min(MAX_COOL_MS, Math.max(1000, header > 0 ? header * 1000 : defaultMs));
+    coolUntil.set(key, Math.max(coolUntil.get(key) || 0, now() + ms));
+  }
+
+  // Pauses en cours (millisecondes restantes par service), pour le diagnostic.
+  function cooldowns() {
+    const out = {};
+    for (const [key, until] of coolUntil) if (until > now()) out[key] = until - now();
+    return out;
   }
 
   function retryDelay(res, attempt) {
@@ -34,7 +57,7 @@ function createHttp({ fetchImpl = globalThis.fetch, sleepImpl = sleep, now = Dat
   }
 
   async function requestJson(url, opts = {}) {
-    const { method = "GET", headers = {}, body, timeoutMs = 15000, retries = 2, throttleKey, minIntervalMs = 0 } = opts;
+    const { method = "GET", headers = {}, body, timeoutMs = 15000, retries = 2, throttleKey, minIntervalMs = 0, rateLimitCoolMs = 0 } = opts;
     const payload = body === undefined ? undefined : JSON.stringify(body);
     let lastErr;
     for (let attempt = 0; attempt <= retries; attempt++) {
@@ -73,8 +96,12 @@ function createHttp({ fetchImpl = globalThis.fetch, sleepImpl = sleep, now = Dat
         detail,
         retryAfterMs: Number.isFinite(header) && header > 0 ? header * 1000 : 0,
       });
+      // Le service dit « trop de requêtes » : on le laisse respirer pour tous les appels, y compris cette reprise,
+      // qui attend la fin de la pause dans throttle() au lieu de retomber aussitôt sur la même réponse.
+      const pause = res.status === 429 && throttleKey && rateLimitCoolMs > 0;
+      if (pause) coolDown(throttleKey, header, rateLimitCoolMs);
       if (!retryable || attempt === retries) break;
-      await sleepImpl(retryDelay(res, attempt));
+      if (!pause) await sleepImpl(retryDelay(res, attempt));
     }
     throw lastErr;
   }
@@ -83,7 +110,7 @@ function createHttp({ fetchImpl = globalThis.fetch, sleepImpl = sleep, now = Dat
   const postJson = (url, body, opts = {}) =>
     requestJson(url, { ...opts, method: "POST", body, headers: { "content-type": "application/json", ...(opts.headers || {}) } });
 
-  return { getJson, postJson, requestJson };
+  return { getJson, postJson, requestJson, cooldowns };
 }
 
 module.exports = { createHttp, HttpError };

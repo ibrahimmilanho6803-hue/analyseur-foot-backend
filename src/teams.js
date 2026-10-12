@@ -32,20 +32,23 @@ function info(s) {
 // (Seules les écritures listées sont indexées, pas leur version abrégée : « Vitória SC » ne doit pas faire de « Vitória » seul
 // un synonyme du club portugais.)
 const GROUP_INDEX = new Map();
+const GROUP_RAW = new Map(); // même index, mais avec les écritures telles qu'elles sont listées (pour les afficher)
 for (const group of GROUPS) {
   const members = new Set(group.map((name) => canon(name)).filter(Boolean));
   for (const m of members) {
     const set = GROUP_INDEX.get(m) || new Set();
     for (const x of members) set.add(x);
     GROUP_INDEX.set(m, set);
+    GROUP_RAW.set(m, group);
   }
 }
 
 // Groupe d'un club d'après un de ses noms : tel quel, puis sans les mots sans importance (« Marseille FC » → « Marseille »).
-function groupOf(name) {
+function lookupGroup(index, name) {
   const i = info(name);
-  return GROUP_INDEX.get(i.c) || (i.core ? GROUP_INDEX.get(i.core) : null) || null;
+  return index.get(i.c) || (i.core ? index.get(i.core) : null) || null;
 }
+const groupOf = (name) => lookupGroup(GROUP_INDEX, name);
 
 function levenshtein(a, b) {
   if (a === b) return 0;
@@ -169,4 +172,30 @@ function findTeam(query, teams, { leagueKey } = {}) {
 
 const coreOf = (s) => info(s).core;
 
-module.exports = { findTeam, scoreName, canon, coreOf };
+// Écritures d'un club à montrer ou à chercher côté site (« PSG », « Man City »…), sans son nom officiel et sans doublon.
+// Mêmes sources que namesOf : nom court, noms alternatifs de la source de données, écritures du groupe du club.
+function spellingsOf(team, max = 16) {
+  // Deux écritures qui ne diffèrent que par des mots sans importance (« Manchester City » / « Manchester City FC ») n'en font qu'une.
+  const keyOf = (text) => {
+    const i = info(text);
+    return i.core || i.c;
+  };
+  const seen = new Set([keyOf(team.name)]);
+  const out = [];
+  const add = (raw) => {
+    const text = String(raw === null || raw === undefined ? "" : raw).replace(/\s+/g, " ").trim();
+    const key = keyOf(text);
+    if (!key || text.length < 2 || text.length > 60 || seen.has(key)) return;
+    seen.add(key);
+    out.push(text);
+  };
+  add(team.shortName);
+  (Array.isArray(team.aliases) ? team.aliases : []).forEach(add);
+  for (const raw of [team.name, team.shortName]) {
+    const group = lookupGroup(GROUP_RAW, raw);
+    if (group) group.forEach(add);
+  }
+  return out.slice(0, max);
+}
+
+module.exports = { findTeam, scoreName, canon, coreOf, spellingsOf };

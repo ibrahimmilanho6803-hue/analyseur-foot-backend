@@ -49,6 +49,45 @@ test("santé et informations générales", async () => {
   }
 });
 
+test("GET /api/teams : clubs des championnats chargés avec leurs écritures courantes", async () => {
+  const s = await start({ aliases: { "PL:0": ["Les Gunners", "The Gunners"], "PL:3": ["Citizens"] } });
+  try {
+    const avant = await s.call("/api/teams");
+    assert.equal(avant.status, 200);
+    assert.equal(avant.json.complet, false, "aucun championnat n'est encore chargé");
+    assert.deepEqual(avant.json.equipes, []);
+    assert.equal(avant.headers.get("cache-control"), "public, max-age=300");
+    await s.w.data.ensureAll();
+    const r = await s.call("/api/teams");
+    assert.equal(r.json.complet, true);
+    assert.deepEqual(r.json.championnats.map((c) => [c.key, c.charge]), [["PL", true], ["PD", true], ["SA", true]]);
+    assert.equal(r.json.equipes.length, 36);
+    const names = r.json.equipes.map((e) => e.nom);
+    assert.deepEqual(names, [...names].sort((a, b) => a.localeCompare(b, "fr")));
+    const city = r.json.equipes.find((e) => e.nom === "Manchester City FC");
+    assert.equal(city.championnat, "PL");
+    assert.ok(city.noms.includes("Man City") && city.noms.includes("Citizens"), JSON.stringify(city));
+    assert.ok(!city.noms.includes("Manchester City FC"));
+    assert.ok(r.json.equipes.find((e) => e.nom === "Arsenal FC").noms.includes("Les Gunners"));
+    assert.ok(!JSON.stringify(r.json).includes("test-key"));
+  } finally {
+    await s.close();
+  }
+});
+
+test("GET /api/teams : un championnat en panne n'empêche pas les autres, et la liste est marquée incomplète", async () => {
+  const s = await start({ failing: ["SA"] });
+  try {
+    await s.w.data.ensureAll();
+    const r = await s.call("/api/teams");
+    assert.equal(r.json.complet, false);
+    assert.deepEqual(r.json.championnats.map((c) => [c.key, c.charge]), [["PL", true], ["PD", true], ["SA", false]]);
+    assert.equal(r.json.equipes.length, 24);
+  } finally {
+    await s.close();
+  }
+});
+
 test("état : sources, IA, réglages du modèle, aucun secret", async () => {
   const s = await start();
   try {
@@ -108,6 +147,51 @@ test("POST /api/analyze : une sélection", async () => {
     assert.equal(r.json.etat, "ok");
     assert.equal(typeof r.json.probabilite, "number");
     assert.equal(r.json.equipesTrouvees1, true);
+  } finally {
+    await s.close();
+  }
+});
+
+test("POST /api/analyze avec ia:false : modèle seul, aucun appel à l'IA, quota IA intact", async () => {
+  const s = await start({ env: { RATE_LIMIT_AI_PER_MIN: "3" } });
+  try {
+    const leg = { equipe1: "Arsenal", equipe2: "Chelsea", typePari: "Plus de 1.5 buts" };
+    const rapide = await s.call("/api/analyze", { method: "POST", body: { legs: [leg, leg, leg, leg, leg, leg], ia: false } });
+    assert.equal(rapide.status, 200, "six sélections sans IA ne comptent pas dans la limite de 3 appels IA par minute");
+    assert.equal(s.w.ai.calls.length, 0);
+    for (const l of rapide.json.legs) {
+      assert.equal(l.etat, "ok");
+      assert.equal(l.ia.statut, "non_demandee");
+      assert.equal(l.ajustementIA, 0);
+      assert.equal(l.probabilite, l.probabiliteModele);
+      assert.ok(l.justification.length > 20, "une explication du modèle reste fournie");
+    }
+    // Une sélection seule fonctionne aussi, et la même demande avec l'IA donne la même base chiffrée.
+    const seule = await s.call("/api/analyze", { method: "POST", body: { ...leg, ia: false } });
+    assert.equal(seule.json.ia.statut, "non_demandee");
+    const complet = await s.call("/api/analyze", { method: "POST", body: leg });
+    assert.equal(complet.status, 200);
+    assert.equal(complet.json.ia.statut, "ok");
+    assert.equal(complet.json.probabiliteModele, seule.json.probabiliteModele);
+    assert.equal(s.w.ai.calls.length, 1);
+    // Le quota IA n'a servi que pour cette dernière demande (1 sur 3) : deux autres passent, la quatrième est refusée.
+    assert.equal((await s.call("/api/analyze", { method: "POST", body: { legs: [leg, leg] } })).status, 200);
+    assert.equal((await s.call("/api/analyze", { method: "POST", body: leg })).status, 429);
+    // Seul `false` désactive l'IA : une valeur quelconque n'a pas cet effet.
+    s.w.clock.t += 61000;
+    const autre = await s.call("/api/analyze", { method: "POST", body: { ...leg, ia: "non" } });
+    assert.equal(autre.json.ia.statut, "ok");
+  } finally {
+    await s.close();
+  }
+});
+
+test("POST /api/analyze avec ia:false : IA désactivée sur le serveur = « desactivee », pas « non_demandee »", async () => {
+  const s = await start({ aiBehaviour: "off" });
+  try {
+    const r = await s.call("/api/analyze", { method: "POST", body: { equipe1: "Arsenal", equipe2: "Chelsea", typePari: "Match nul", ia: false } });
+    assert.equal(r.json.etat, "ok");
+    assert.equal(r.json.ia.statut, "desactivee");
   } finally {
     await s.close();
   }
@@ -319,6 +403,26 @@ test("GET /api/backtest : rapport de fiabilité, paramètres bornés, championna
     assert.equal(one.json.parametres.jours, 365);
     assert.deepEqual(one.json.parChampionnat.map((c) => c.championnat), ["PL"]);
     assert.equal((await s.call("/api/backtest?championnat=XYZ")).status, 404);
+  } finally {
+    await s.close();
+  }
+});
+
+test("GET /api/backtest : réglages d'essai bornés et signalés, valeurs illisibles ignorées", async () => {
+  const s = await start({ aiBehaviour: "off" });
+  try {
+    const r = await s.call("/api/backtest?pas=14&echelle=9&exposant=0.7&demiVie=200&niveauDemiVie=60&rho=abc");
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.json.essai, { halfLifeDays: 200, levelHalfLifeDays: 60, strengthExponent: 0.7, levelFactor: 1.3 });
+    assert.equal(r.json.parametres.pasEnJours, 14);
+    assert.equal(r.json.parametres.modele.coefficientDeNiveau, 1.3);
+    assert.equal(r.json.parametres.modele.demiVieJours, 200);
+    assert.equal(r.json.reglages.halfLifeDays, 300, "les réglages du serveur ne sont pas modifiés par un essai");
+    const plain = await s.call("/api/backtest");
+    assert.equal(plain.json.essai, undefined);
+    assert.equal(plain.json.parametres.modele.coefficientDeNiveau, 1);
+    assert.equal(plain.json.parametres.pasEnJours, 7);
+    assert.ok(plain.json.butsParMatch.prevus > 0);
   } finally {
     await s.close();
   }

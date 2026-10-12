@@ -1,0 +1,29 @@
+name: Surveillance de l'API
+
+# Toutes les 6 heures (et à la demande depuis l'onglet « Actions »), contrôle l'API en production :
+# serveur joignable, données chargées et récentes, IA ni en pause ni bloquée, budget d'appels non épuisé,
+# et une vraie analyse d'essai (sans IA, donc sans coût). Si quelque chose ne va pas, l'exécution échoue et
+# GitHub envoie un e-mail au propriétaire du dépôt. Voir scripts/controle-sante.js.
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: surveillance
+  cancel-in-progress: false
+
+jobs:
+  controle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Contrôle de santé de l'API
+        run: node scripts/controle-sante.js

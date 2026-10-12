@@ -154,3 +154,118 @@ test("erreur 429 : le délai demandé par le serveur est exposé", async () => {
   const { http } = makeHttp([res(429, {}, { "retry-after": "7" })]);
   await assert.rejects(http.postJson("https://exemple.test/p", {}, { retries: 0 }), (e) => e.code === "RATE_LIMIT" && e.retryAfterMs === 7000);
 });
+
+// Horloge virtuelle : les attentes (sleep) avancent un temps simulé, dans l'ordre, sans rien attendre pour de vrai.
+function virtualClock() {
+  let t = 0;
+  const timers = [];
+  return {
+    now: () => t,
+    sleep: (ms) => new Promise((resolve) => timers.push({ at: t + ms, resolve })),
+    async run(promise) {
+      let done = false;
+      const finished = promise.then(
+        () => (done = true),
+        () => (done = true)
+      );
+      for (let guard = 0; !done; guard++) {
+        assert.ok(guard < 5000, "le scénario ne se termine pas");
+        await new Promise((r) => setImmediate(r));
+        if (done || !timers.length) continue;
+        timers.sort((a, b) => a.at - b.at);
+        const next = timers.shift();
+        t = Math.max(t, next.at);
+        next.resolve();
+      }
+      await finished;
+      return promise;
+    },
+  };
+}
+
+// Faux fetch qui note l'instant de chaque appel ; `answers(n)` donne la réponse du n-ième appel.
+function timedFetch(clock, answers) {
+  const log = [];
+  const fetchImpl = async () => {
+    log.push(clock.now());
+    return answers(log.length);
+  };
+  return { fetchImpl, log };
+}
+
+test("429 : le service est mis en pause, la reprise attend la fin de la pause au lieu de retomber aussitôt sur la limite", async () => {
+  const clock = virtualClock();
+  const { fetchImpl, log } = timedFetch(clock, (n) => (n === 1 ? res(429, {}) : res(200, { ok: n })));
+  const http = createHttp({ fetchImpl, sleepImpl: clock.sleep, now: clock.now });
+  const out = await clock.run(http.getJson("https://exemple.test/a", { throttleKey: "svc", minIntervalMs: 1000, rateLimitCoolMs: 60000 }));
+  assert.deepEqual(out, { ok: 2 });
+  assert.deepEqual(log, [0, 60000]);
+});
+
+test("429 : sans durée de pause demandée, le comportement d'origine est conservé (courte attente puis reprise)", async () => {
+  const clock = virtualClock();
+  const { fetchImpl, log } = timedFetch(clock, (n) => (n === 1 ? res(429, {}) : res(200, {})));
+  const http = createHttp({ fetchImpl, sleepImpl: clock.sleep, now: clock.now });
+  await clock.run(http.getJson("https://exemple.test/a", { throttleKey: "svc", minIntervalMs: 1000 }));
+  assert.equal(log.length, 2);
+  assert.ok(log[1] < 5000, `reprise tardive : ${log[1]}`);
+});
+
+test("429 : les appels déjà planifiés se replacent derrière la pause, espacés, sans repartir pendant le blocage", async () => {
+  const clock = virtualClock();
+  const { fetchImpl, log } = timedFetch(clock, (n) => (n === 1 ? res(429, {}) : res(200, { n })));
+  const http = createHttp({ fetchImpl, sleepImpl: clock.sleep, now: clock.now });
+  const opts = { throttleKey: "svc", minIntervalMs: 1000, rateLimitCoolMs: 60000 };
+  const all = Promise.all([http.getJson("https://exemple.test/a", opts), http.getJson("https://exemple.test/b", opts), http.getJson("https://exemple.test/c", opts)]);
+  const out = await clock.run(all);
+  assert.equal(out.length, 3);
+  assert.equal(log[0], 0);
+  // Aucun appel entre le premier refus et la fin de la pause, puis les trois repartent espacés d'une seconde.
+  assert.deepEqual(log.slice(1), [60000, 61000, 62000]);
+});
+
+test("429 : un appel qui arrive pendant la pause attend sa fin", async () => {
+  const clock = virtualClock();
+  const { fetchImpl, log } = timedFetch(clock, (n) => (n === 1 ? res(429, {}) : res(200, {})));
+  const http = createHttp({ fetchImpl, sleepImpl: clock.sleep, now: clock.now });
+  const opts = { throttleKey: "svc", minIntervalMs: 1000, rateLimitCoolMs: 60000 };
+  const first = http.getJson("https://exemple.test/a", opts);
+  await new Promise((r) => setImmediate(r)); // le premier appel a reçu son 429
+  const second = http.getJson("https://exemple.test/b", opts);
+  await clock.run(Promise.all([first, second]));
+  assert.equal(log[0], 0);
+  assert.ok(log.slice(1).every((t) => t >= 60000), `appel parti pendant la pause : ${log}`);
+  assert.equal(log.length, 3);
+});
+
+test("429 : la pause est aussi posée quand il ne reste plus de reprise, et les services voisins ne sont pas touchés", async () => {
+  const clock = virtualClock();
+  const { fetchImpl, log } = timedFetch(clock, (n) => (n === 1 ? res(429, {}) : res(200, {})));
+  const http = createHttp({ fetchImpl, sleepImpl: clock.sleep, now: clock.now });
+  await assert.rejects(clock.run(http.getJson("https://exemple.test/a", { throttleKey: "svc", rateLimitCoolMs: 60000, retries: 0 })), (e) => e.code === "RATE_LIMIT");
+  assert.deepEqual(http.cooldowns(), { svc: 60000 });
+  // Un autre service n'attend pas ; le service en pause, si.
+  await clock.run(http.getJson("https://exemple.test/b", { throttleKey: "autre", rateLimitCoolMs: 60000 }));
+  assert.equal(log[1], 0);
+  await clock.run(http.getJson("https://exemple.test/c", { throttleKey: "svc", rateLimitCoolMs: 60000 }));
+  assert.equal(log[2], 60000);
+  assert.deepEqual(http.cooldowns(), {}, "la pause est terminée");
+});
+
+test("429 : Retry-After prime sur la durée habituelle, avec un plafond", async () => {
+  for (const [header, attendu] of [["5", 5000], ["3600", 90000]]) {
+    const clock = virtualClock();
+    const { fetchImpl, log } = timedFetch(clock, (n) => (n === 1 ? res(429, {}, { "retry-after": header }) : res(200, {})));
+    const http = createHttp({ fetchImpl, sleepImpl: clock.sleep, now: clock.now });
+    await clock.run(http.getJson("https://exemple.test/a", { throttleKey: "svc", rateLimitCoolMs: 60000 }));
+    assert.deepEqual(log, [0, attendu], `Retry-After ${header}`);
+  }
+});
+
+test("429 sans clé de service : pas de pause générale (appel isolé)", async () => {
+  const clock = virtualClock();
+  const { fetchImpl } = timedFetch(clock, (n) => (n === 1 ? res(429, {}) : res(200, {})));
+  const http = createHttp({ fetchImpl, sleepImpl: clock.sleep, now: clock.now });
+  await clock.run(http.getJson("https://exemple.test/a", { rateLimitCoolMs: 60000 }));
+  assert.deepEqual(http.cooldowns(), {});
+});

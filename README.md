@@ -31,10 +31,11 @@ Serveur Node.js (Express) de l'application **Analyseur Foot Pro**. Il calcule de
 | `GET /health` | Sonde de santé (pour Render). |
 | `GET /api/status` | État des sources de données, de l'IA, des réglages du modèle et alertes éventuelles. |
 | `GET /api/leagues` | Championnats suivis. |
-| `POST /api/analyze` | Analyse d'une sélection `{ equipe1, equipe2, typePari }` ou de plusieurs `{ legs: [...] }` (12 maximum). |
+| `GET /api/teams` | Liste des clubs des championnats chargés, avec leurs écritures courantes (« PSG », « Man City »…) : sert aux suggestions de saisie du site. `complet: false` tant qu'un championnat n'est pas chargé. Mise en cache 5 minutes par le navigateur. |
+| `POST /api/analyze` | Analyse d'une sélection `{ equipe1, equipe2, typePari }` ou de plusieurs `{ legs: [...] }` (12 maximum). Avec `"ia": false` dans le corps, réponse **rapide du seul modèle statistique** (aucun appel à l'IA, quota IA intact, `ia.statut: "non_demandee"`) : le site peut l'afficher tout de suite, puis relancer la demande avec l'IA. |
 | `GET /api/top-matches` | Les 3 meilleurs paris (3 matchs différents) des prochaines 72 h (jusqu'à 7 jours si besoin). |
 | `POST /api/auto-coupon` | `{ matches: [{ equipe1, equipe2 }] }` : meilleur pari par match. |
-| `GET /api/backtest?jours=120&championnat=PL` | Rapport de fiabilité sur les matchs récents. |
+| `GET /api/backtest?jours=120&championnat=PL` | Rapport de fiabilité sur les matchs récents (voir « Contrôle de fiabilité » plus bas). |
 | `/api/analyze-simple` | **Supprimée** (410) : elle permettait à n'importe qui d'utiliser votre clé Anthropic. |
 
 Si une équipe ou un type de pari n'est pas reconnu, la réponse contient `probabilite: null`, un `etat`
@@ -66,6 +67,7 @@ TheSportsDB, aux **noms alternatifs de chaque club** (lus automatiquement, un ap
 | `AI_EFFORT` | `low`, `medium` ou `high`. | `medium` |
 | `AI_ENABLED` | `false` pour couper l'IA sans toucher à la clé. | `true` |
 | `AI_DAILY_BUDGET_CALLS` | Nombre maximal d'appels à l'IA par jour (protège votre facture). | `400` |
+| `AI_MAX_PARALLEL` | Nombre d'appels à l'IA en même temps (de 1 à 12). Plus haut = coupon plus rapide, mais plus de risque d'atteindre la limite de débit de votre compte Anthropic. | `6` |
 | `AI_MAX_ADJUST_POINTS` | Correction maximale de l'IA, en points de pourcentage. | `4` |
 | `AI_TIMEOUT_MS` | Délai maximal d'un appel à l'IA. | `40000` |
 | `ALLOWED_ORIGINS` | Adresses de sites autorisées, séparées par des virgules (s'ajoutent au site officiel, aux aperçus Vercel, à l'application mobile et à `localhost`). | — |
@@ -75,8 +77,50 @@ TheSportsDB, aux **noms alternatifs de chaque club** (lus automatiquement, un ap
 | `TOP_WINDOW_HOURS` / `TOP_MAX_WINDOW_HOURS` / `TOP_TARGET_ODDS` | Fenêtre du Top 3 et cote totale visée. | `72` / `168` / `2.5` |
 | `MODEL_AUTOTUNE` | `false` pour désactiver le réglage automatique du modèle. | `true` |
 | `MODEL_HALF_LIFE_DAYS` / `MODEL_PRIOR_MATCHES` | Réglages de départ du modèle (affinés ensuite automatiquement). | `300` / `10` |
+| `SPORTSDB_MIN_INTERVAL_MS` | Écart minimal entre deux appels à TheSportsDB. **Ne le baissez pas si la même clé sert à une autre application** : les limites (30 appels/min en gratuit, 100 en Premium) sont communes à toutes les applications qui utilisent la clé. Si le service répond « trop de requêtes » (429), le serveur le laisse tranquille pendant environ une minute au lieu d'insister. | `2100` |
 | `FOOTBALL_DATA_MIN_INTERVAL_MS` | Écart minimal entre deux appels à football-data.org (10 appels/min en gratuit). | `6500` |
 | `PORT` | Port d'écoute (fourni par Render). | `3001` |
+
+## Contrôle de fiabilité (`/api/backtest`)
+
+Le serveur rejoue les matchs des derniers mois, semaine par semaine, avec ce qu'il savait à l'époque, et compare ses
+probabilités à ce qui s'est réellement passé. Pour chaque type de pari, le rapport donne la probabilité moyenne
+annoncée et la fréquence réelle, la note de Brier et la log-perte (comparées à une référence qui ne connaîtrait que la
+fréquence moyenne du championnat) et la **pente de calibrage** (`pente` : 1 = parfait, moins de 1 = probabilités trop
+tranchées). `butsParMatch` compare le total de buts annoncé et réel, par championnat aussi.
+
+Le rapport est en lecture seule et sans effet sur les réponses du serveur. Pour comparer des réglages **sur exactement les
+mêmes matchs**, ajoutez des paramètres facultatifs (bornés, valeurs illisibles ignorées ; 6 appels par minute au plus,
+résultat gardé 6 h) :
+
+| Paramètre | Rôle |
+|---|---|
+| `pas` | Jours entre deux ré-ajustements du modèle (3 à 28, défaut 7). |
+| `demiVie`, `prior` | Demi-vie des matchs (30 à 1500 jours) et nombre de matchs fictifs ramenant vers la moyenne (0 à 60). |
+| `rho` | Correction de Dixon-Coles sur les petits scores (−0,3 à 0,1). |
+| `niveauDemiVie`, `niveauPrior` | Réestime le niveau de buts du championnat avec une mémoire plus courte que les forces d'équipes (0 = désactivé). |
+| `exposant` | Rapproche les forces des équipes de la moyenne (0,3 à 1,3 ; moins de 1 = moins tranché). |
+| `echelle` | Coefficient appliqué au niveau de buts (0,8 à 1,3). |
+
+La réponse reprend les réglages essayés (`essai`) et ceux du serveur (`reglages`).
+
+## Surveillance
+
+`scripts/controle-sante.js` contrôle l'API en production : serveur joignable, tous les championnats chargés et rafraîchis
+depuis moins de 3 h, aucun avertissement dans `/api/status`, IA ni en pause ni bloquée (clé refusée, crédit épuisé, modèle
+introuvable), budget quotidien d'appels non épuisé, et une vraie analyse d'essai (deux clubs, pari « Score exact » : sans
+IA, donc gratuite). Le premier essai raté est suivi de deux autres, à une minute d'écart, pour ne pas donner l'alerte lors
+d'un simple redémarrage.
+
+```bash
+node scripts/controle-sante.js                              # production (https://analyseur-foot-api.onrender.com)
+node scripts/controle-sante.js http://localhost:3001 --sans-test
+```
+
+Code de sortie 0 = tout va bien, 1 = problème (affiché en clair). Le fichier `.github/workflows/surveillance.yml` le lance
+**toutes les 6 heures** sur GitHub (onglet « Actions », aussi à la demande) : en cas de problème, l'exécution échoue et GitHub
+envoie un e-mail au propriétaire du dépôt. Une sonde externe gratuite (par exemple UptimeRobot) sur `/health` reste un bon
+complément pour être prévenu en quelques minutes d'une panne complète.
 
 ## Lancer en local
 
@@ -122,4 +166,7 @@ actualisation a échoué.
 Pour chaque championnat, `equipes` donne le nombre de clubs connus et `equipesAvecNomsAlternatifs` le nombre de clubs
 dont TheSportsDB a fourni des noms alternatifs. Un `0` partout signifie seulement que cette liste n'a pas été reçue
 (l'analyse fonctionne, avec les écritures de la liste `src/team-groups.js`) ; elle est redemandée au bout d'une heure.
+Juste après un redémarrage, tant que les championnats se chargent, une équipe encore inconnue donne `etat: "chargement"`
+(« Les données des championnats sont en cours de chargement, réessayez dans une minute. ») et non « équipe introuvable ». Si une source est en panne, le
+message le dit (« Données momentanément indisponibles pour : Liga »).
 Les clés n'apparaissent jamais dans les journaux ni dans les réponses.

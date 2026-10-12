@@ -42,6 +42,8 @@ function loadConfig(env = process.env) {
       timeoutMs: num(env.AI_TIMEOUT_MS, 40000),
       maxAdjustPoints: num(env.AI_MAX_ADJUST_POINTS, 4),
       dailyBudget: num(env.AI_DAILY_BUDGET_CALLS, 400),
+      // Appels à l'IA en même temps (un coupon de 12 paris se traite en deux vagues de 6 au lieu de trois de 4).
+      maxParallel: Math.min(12, Math.max(1, Math.round(num(env.AI_MAX_PARALLEL, 6)))),
     },
     providers: {
       order,

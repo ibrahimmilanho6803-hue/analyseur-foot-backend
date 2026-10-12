@@ -2,7 +2,8 @@
 
 // Démarre le vrai server.js avec de faux services et vérifie les routes principales.
 // Usage : npm run e2e
-const { spawn } = require("node:child_process");
+const { spawn, execFile } = require("node:child_process");
+const { promisify } = require("node:util");
 const path = require("node:path");
 const assert = require("node:assert/strict");
 
@@ -62,6 +63,28 @@ async function main() {
   assert.equal(an.json.etat, "ok");
   assert.equal(an.json.ia.statut, "ok");
   console.log(`✔ analyse Arsenal–Chelsea : ${an.json.probabilite} % (modèle ${an.json.probabiliteModele} %, IA ${an.json.ajustementIA > 0 ? "+" : ""}${an.json.ajustementIA})`);
+
+  // Analyse rapide sans IA : le modèle seul, sans entamer le quota ni le budget de l'IA.
+  const appelsAvant = (await get("/api/status")).json.ia.appelsAujourdhui;
+  const rapide = await get("/api/analyze", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ equipe1: "Arsenal", equipe2: "Chelsea", typePari: "Les deux équipes marquent", ia: false }) });
+  assert.equal(rapide.json.etat, "ok");
+  assert.equal(rapide.json.ia.statut, "non_demandee");
+  assert.equal(rapide.json.probabilite, rapide.json.probabiliteModele);
+  assert.equal((await get("/api/status")).json.ia.appelsAujourdhui, appelsAvant, "aucun appel à l'IA");
+  console.log(`✔ analyse rapide sans IA : ${rapide.json.probabilite} % (aucun appel à l'IA)`);
+
+  // Liste des clubs pour les suggestions de saisie : chaque club est retrouvé par son nom officiel.
+  const teams = await get("/api/teams");
+  assert.equal(teams.status, 200);
+  assert.equal(teams.json.complet, true);
+  assert.ok(teams.json.equipes.length >= 100, `clubs : ${teams.json.equipes.length}`);
+  assert.ok(teams.json.equipes.find((t) => t.nom === "Arsenal FC"));
+  console.log(`✔ liste des clubs : ${teams.json.equipes.length} clubs, ${teams.json.championnats.length} championnats`);
+
+  // Le contrôle de santé (lancé toutes les 6 h en production) passe sur ce serveur en bon état, analyse d'essai comprise.
+  const sante = await promisify(execFile)(process.execPath, [path.join(root, "scripts", "controle-sante.js"), base, "--essais=1", "--attente=1"], { timeout: 60000 });
+  assert.match(sante.stdout, /Tout va bien/);
+  console.log("✔ contrôle de santé : tout va bien");
 
   const st2 = (await get("/api/status")).json;
   assert.equal(st2.ia.formeDeRequete, 0, "la forme de requête principale pour Sonnet 5.5 est acceptée");

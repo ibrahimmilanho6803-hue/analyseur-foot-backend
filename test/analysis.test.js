@@ -167,6 +167,35 @@ test("sans aucune donnée chargée, l'état « chargement » est renvoyé", () =
   assert.equal(w.analysis.resolveTeams("Arsenal", "Chelsea").state, "chargement");
 });
 
+test("démarrage : tant que des championnats ne sont pas chargés, un club introuvable donne « chargement » et non « équipe introuvable »", async () => {
+  const w = buildWorld({ aiBehaviour: "off" });
+  await w.data.getLeagueData("PL"); // seul le championnat anglais est prêt
+  assert.equal(w.analysis.resolveTeams("Arsenal", "Chelsea").state, "ok");
+  assert.equal(w.analysis.resolveTeams("Real Madrid", "Barcelona").state, "chargement");
+  // Un club trouvé limite la recherche de l'autre à son championnat, déjà chargé : la réponse est définitive.
+  assert.equal(w.analysis.resolveTeams("Arsenal", "Nulle part").state, "equipe_inconnue");
+  assert.deepEqual(w.data.unloadedLeagues().map((l) => [l.key, l.etat]), [["PD", "chargement"], ["SA", "chargement"]]);
+  await w.data.ensureAll();
+  assert.equal(w.analysis.resolveTeams("Real Madrid", "Barcelona").state, "ok");
+  assert.equal(w.analysis.resolveTeams("Nulle part", "Ailleurs").state, "equipe_inconnue");
+  assert.deepEqual(w.data.unloadedLeagues(), []);
+});
+
+test("championnat en panne : le message le dit, car le club cherché est peut-être dedans (analyse et coupon automatique)", async () => {
+  const w = buildWorld({ aiBehaviour: "off", failing: ["PD"] });
+  const [r] = await w.analysis.analyzeLegs([leg("Real Madrid", "Barcelona", "Match nul")]);
+  assert.equal(r.etat, "equipe_inconnue");
+  assert.match(r.message, /Données momentanément indisponibles pour : Liga/);
+  const auto = await w.coupons.autoCoupon([{ equipe1: "Real Madrid", equipe2: "Barcelona" }]);
+  assert.equal(auto.resultats[0].etat, "equipe_inconnue");
+  assert.match(auto.resultats[0].message, /indisponibles pour : Liga/);
+  // Un club trouvé limite la recherche de l'autre à son championnat : inutile d'évoquer les pannes.
+  const [ok] = await w.analysis.analyzeLegs([leg("Arsenal", "Nulle part", "Match nul")]);
+  assert.equal(ok.etat, "equipe_inconnue");
+  assert.doesNotMatch(ok.message, /indisponibles pour/);
+  assert.deepEqual(w.data.unloadedLeagues().map((l) => [l.key, l.etat]), [["PD", "echec"]]);
+});
+
 test("si toutes les sources ont échoué, le message le dit au lieu de promettre « réessayez dans une minute »", async () => {
   const w = buildWorld({ aiBehaviour: "off", failing: ["PL", "PD", "SA"] });
   const [r] = await w.analysis.analyzeLegs([leg("Arsenal", "Chelsea", "Match nul")]);
