@@ -1,11 +1,15 @@
 "use strict";
 
+const { clamp } = require("./util");
+
 const num = (v, d) => {
   if (v === undefined || v === null || v === "") return d;
   const n = Number(v);
   return Number.isFinite(n) ? n : d;
 };
 const csv = (v) => (v ? String(v).split(",").map((s) => s.trim()).filter(Boolean) : null);
+// Interrupteur « arrêt » : false / off / 0 / non / no (majuscules ou non). Toute autre valeur, ou l'absence de valeur, laisse activé.
+const isOff = (v) => v !== undefined && v !== null && ["false", "off", "0", "non", "no"].includes(String(v).trim().toLowerCase());
 
 const DEFAULT_ORIGINS = [
   "https://analyseur-foot-web.vercel.app",
@@ -61,6 +65,12 @@ function loadConfig(env = process.env) {
       // Réglage automatique : le serveur rejoue les matchs récents avec plusieurs réglages et garde le meilleur.
       autoTune: env.MODEL_AUTOTUNE !== "false",
       tuneGrid: { halfLifeDays: [150, 300, 500], priorMatches: [4, 10, 20] },
+      // Correction des totaux de buts (« plus de 1.5 / 2.5 », « les deux équipes marquent »…), sans toucher au 1-N-2 :
+      //  - rythme des équipes rapproché de la moyenne (exposant < 1 ; 1 = pas de correction) ;
+      //  - niveau de buts ajusté chaque jour d'après l'écart observé entre buts prévus et buts marqués (voir tuning.js).
+      // MODEL_CALIBRATION=off coupe les deux et revient au modèle d'avant (retour arrière sans redéployer le code).
+      calibration: !isOff(env.MODEL_CALIBRATION),
+      rhythmExponent: clamp(num(env.MODEL_RHYTHM_EXPONENT, 0.5), 0.2, 1),
     },
     cache: {
       seasonTtlMs: num(env.CACHE_SEASON_TTL_MIN, 20) * 60000,

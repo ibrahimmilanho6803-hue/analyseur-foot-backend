@@ -12,14 +12,16 @@ Serveur Node.js (Express) de l'application **Analyseur Foot Pro**. Il calcule de
    peu de matchs, comme un promu, est ramenée vers la moyenne). On en déduit le nombre de buts attendus de chaque
    équipe, puis la probabilité de **chaque score**, et enfin celle de chaque type de pari. Toutes les probabilités
    viennent de la même matrice de scores : elles sont cohérentes entre elles (« plus de 2.5 » + « moins de 2.5 » = 100 %).
+   Les totaux de buts sont corrigés à la source (rythme des équipes et niveau de buts, voir « Correction des totaux de buts »),
+   donc tous les paris restent cohérents entre eux.
 3. **IA (Claude Sonnet 5.5)** : elle reçoit les chiffres du modèle, la forme, les bilans domicile/extérieur et les
    confrontations directes. Elle rédige la justification, indique son niveau de confiance et peut corriger la
    probabilité **de 4 points au maximum** si elle connaît un facteur concret. Si l'IA est indisponible, le résultat
    du modèle est renvoyé quand même (champ `ia.statut`).
 4. **Contrôle de fiabilité** : le serveur rejoue les matchs récents semaine par semaine (en n'utilisant que ce qui
    était connu à l'époque) et compare ses probabilités à la réalité et à une référence simple. Il règle lui-même
-   le modèle et abaisse les probabilités des paris automatiques si elles se sont révélées trop optimistes.
-   Le détail est consultable sur `/api/backtest`.
+   le modèle, ajuste chaque jour le niveau de buts attendu d'après l'écart observé et abaisse les probabilités des
+   paris automatiques si elles se sont révélées trop optimistes. Le détail est consultable sur `/api/backtest`.
 
 > Les **cotes affichées** sont des cotes « équitables » (1 ÷ probabilité). Un bookmaker applique une marge :
 > ses cotes réelles seront plus basses. Cette application n'a pas accès aux cotes des opérateurs.
@@ -29,7 +31,7 @@ Serveur Node.js (Express) de l'application **Analyseur Foot Pro**. Il calcule de
 | Route | Rôle |
 |---|---|
 | `GET /health` | Sonde de santé (pour Render). |
-| `GET /api/status` | État des sources de données, de l'IA, des réglages du modèle et alertes éventuelles. |
+| `GET /api/status` | État des sources de données, de l'IA, des réglages du modèle (dont la correction des totaux de buts, `modele.correctionDesButs`) et alertes éventuelles. |
 | `GET /api/leagues` | Championnats suivis. |
 | `GET /api/teams` | Liste des clubs des championnats chargés, avec leurs écritures courantes (« PSG », « Man City »…) : sert aux suggestions de saisie du site. `complet: false` tant qu'un championnat n'est pas chargé. Mise en cache 5 minutes par le navigateur. |
 | `POST /api/analyze` | Analyse d'une sélection `{ equipe1, equipe2, typePari }` ou de plusieurs `{ legs: [...] }` (12 maximum). Avec `"ia": false` dans le corps, réponse **rapide du seul modèle statistique** (aucun appel à l'IA, quota IA intact, `ia.statut: "non_demandee"`) : le site peut l'afficher tout de suite, puis relancer la demande avec l'IA. |
@@ -77,9 +79,39 @@ TheSportsDB, aux **noms alternatifs de chaque club** (lus automatiquement, un ap
 | `TOP_WINDOW_HOURS` / `TOP_MAX_WINDOW_HOURS` / `TOP_TARGET_ODDS` | Fenêtre du Top 3 et cote totale visée. | `72` / `168` / `2.5` |
 | `MODEL_AUTOTUNE` | `false` pour désactiver le réglage automatique du modèle. | `true` |
 | `MODEL_HALF_LIFE_DAYS` / `MODEL_PRIOR_MATCHES` | Réglages de départ du modèle (affinés ensuite automatiquement). | `300` / `10` |
+| `MODEL_CALIBRATION` | **Interrupteur de sécurité** : `off` coupe la correction des totaux de buts (rythme des équipes et niveau de buts, voir plus bas) et redonne le modèle d'avant. À poser dans Render → Environment ; le service redémarre. | actif |
+| `MODEL_RHYTHM_EXPONENT` | Intensité de la correction du rythme des équipes, de 0,2 (très forte) à 1 (aucune correction du rythme ; le niveau de buts reste ajusté chaque jour). | `0.5` |
 | `SPORTSDB_MIN_INTERVAL_MS` | Écart minimal entre deux appels à TheSportsDB. **Ne le baissez pas si la même clé sert à une autre application** : les limites (30 appels/min en gratuit, 100 en Premium) sont communes à toutes les applications qui utilisent la clé. Si le service répond « trop de requêtes » (429), le serveur le laisse tranquille pendant environ une minute au lieu d'insister. | `2100` |
 | `FOOTBALL_DATA_MIN_INTERVAL_MS` | Écart minimal entre deux appels à football-data.org (10 appels/min en gratuit). | `6500` |
 | `PORT` | Port d'écoute (fourni par Render). | `3001` |
+
+## Correction des totaux de buts
+
+Le contrôle de fiabilité sur 365 jours a montré que « plus de 1.5 buts », « plus de 2.5 buts » et « les deux équipes marquent »
+étaient annoncés **trop bas** (par exemple 50,9 % annoncé pour 55,3 % réalisé sur « plus de 2.5 »), alors que le 1-N-2 était
+juste. Deux causes, deux corrections, appliquées **à la source** (aux buts attendus de chaque équipe) pour que tous les paris
+restent cohérents entre eux :
+
+1. **Rythme des équipes.** Chaque équipe a une *force* (attaque ÷ défense : meilleure ou moins bonne que son adversaire, ce qui
+   décide du 1-N-2) et un *rythme* (attaque × défense : ses matchs comptent-ils beaucoup de buts, ce qui décide des totaux). Le
+   rythme est bien plus bruité que la force : le modèle le prenait trop au sérieux (probabilités de totaux deux fois trop
+   dispersées d'un match à l'autre). Il est donc rapproché de la moyenne (exposant `MODEL_RHYTHM_EXPONENT`, 0,5 par défaut :
+   l'écart de rythme d'une équipe avec la moyenne est réduit de moitié, en proportion). La force n'est pas touchée : le 1-N-2 ne change pas.
+2. **Niveau de buts.** Le modèle prévoyait en moyenne 2,75 buts par match pour 2,84 marqués. Au démarrage puis chaque jour, le serveur
+   rejoue les 180 derniers jours **sans coefficient** et compare les buts prévus et marqués. L'écart est exprimé en marges d'erreur
+   (z) et seule la fraction `1 − 1/z²` de l'écart est corrigée (aucune correction sous 1 marge d'erreur, 75 % à 2, 91 % à 3,3) :
+   un écart incertain est peu corrigé, un écart net presque entièrement. Le coefficient obtenu multiplie les buts attendus de
+   toutes les équipes ; il est borné à ± 8 %, il peut monter comme baisser, et faute de 600 matchs récents il reste à 1.
+
+Où le voir : `/api/status` → `modele.correctionDesButs` (interrupteur, exposant du rythme, coefficient de niveau en service) et
+`modele.reglageAutomatique.niveauDeButs` (matchs mesurés, buts prévus et réels, écart en marges d'erreur, coefficient, raison).
+Après un redémarrage le coefficient repart de 1 et est recalculé dès que les championnats sont chargés (environ une minute).
+
+**Revenir en arrière** : `MODEL_CALIBRATION=off` dans Render → Environment (le service redémarre) redonne exactement le modèle
+d'avant. `MODEL_RHYTHM_EXPONENT=1` ne coupe que la correction du rythme.
+
+**Comparer avant / après** : sans paramètre, `/api/backtest` utilise les réglages en service, correction comprise ; le modèle d'avant
+s'obtient avec `/api/backtest?exposantRythme=1&echelle=1` (mêmes matchs, mêmes dates).
 
 ## Contrôle de fiabilité (`/api/backtest`)
 
@@ -92,9 +124,10 @@ Les huit premiers marchés (1-N-2, double chance, plus de 1.5 / 2.5 buts, les de
 tranches de calibrage ; cinq marchés de plus (plus de 3.5 buts, un ou deux buts de chaque équipe) servent à vérifier
 qu'un réglage n'en abîme pas d'autres.
 
-Le rapport est en lecture seule et sans effet sur les réponses du serveur. Pour comparer des réglages **sur exactement les
+Le rapport est en lecture seule et sans effet sur les réponses du serveur. Sans paramètre, il utilise les réglages en service
+(`reglages` dans la réponse), correction des totaux de buts comprise. Pour comparer des réglages **sur exactement les
 mêmes matchs**, ajoutez des paramètres facultatifs (bornés, valeurs illisibles ignorées ; 6 appels par minute au plus,
-résultat gardé 6 h) :
+résultat gardé 6 h, et jamais conservé au-delà d'un changement de réglage du serveur) :
 
 | Paramètre | Rôle |
 |---|---|

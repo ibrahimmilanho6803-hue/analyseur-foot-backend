@@ -3,6 +3,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { createDataService } = require("../src/data");
+const { fitLeague, expectedGoals } = require("../src/model");
 const { SwrCache } = require("../src/cache");
 const { loadConfig } = require("../src/config");
 const { simulateLeague, DAY } = require("./helpers");
@@ -229,13 +230,60 @@ test("changer les réglages du modèle recalcule les forces d'équipes sans re-t
   const svc = service([p]);
   const before = await svc.getLeagueData("PL");
   const calls = p.calls.length;
-  assert.deepEqual(svc.getModelParams(), { halfLifeDays: 300, priorMatches: 10 });
-  svc.setModelParams({ halfLifeDays: 40, priorMatches: 60 });
+  assert.deepEqual(svc.getModelParams(), { halfLifeDays: 300, priorMatches: 10, rhythmExponent: 0.5, levelFactor: 1 });
+  assert.equal(svc.setModelParams({ halfLifeDays: 40, priorMatches: 60 }), true);
   const after = await svc.getLeagueData("PL");
   assert.notEqual(after, before);
   assert.notEqual(after.fit.teams.get("T0").a, before.fit.teams.get("T0").a);
   assert.equal(p.calls.length, calls, "les matchs déjà téléchargés sont réutilisés");
-  assert.deepEqual(svc.getModelParams(), { halfLifeDays: 40, priorMatches: 60 });
+  assert.deepEqual(svc.getModelParams(), { halfLifeDays: 40, priorMatches: 60, rhythmExponent: 0.5, levelFactor: 1 });
+});
+
+test("réglages du modèle : seuls les réglages fournis et valides changent, sans changement rien n'est recalculé", async () => {
+  const { cur, prev } = fixtureSeasons();
+  const svc = service([fakeProvider("a", (l, year) => ({ matches: year === 2026 ? cur : prev, limited: false }))]);
+  const first = await svc.getLeagueData("PL");
+  assert.equal(svc.setModelParams({ halfLifeDays: 300, priorMatches: 10 }), false, "mêmes valeurs : aucun changement");
+  assert.equal(svc.setModelParams({}), false);
+  assert.equal(svc.setModelParams({ levelFactor: NaN, rhythmExponent: "0.5", halfLifeDays: undefined, priorMatches: null }), false, "valeurs illisibles ignorées");
+  assert.equal(await svc.getLeagueData("PL"), first, "le calcul en mémoire est conservé");
+
+  assert.equal(svc.setModelParams({ levelFactor: 1.04 }), true);
+  assert.deepEqual(svc.getModelParams(), { halfLifeDays: 300, priorMatches: 10, rhythmExponent: 0.5, levelFactor: 1.04 }, "les autres réglages ne bougent pas");
+  const second = await svc.getLeagueData("PL");
+  assert.notEqual(second, first);
+});
+
+test("correction des totaux de buts : MODEL_CALIBRATION=off redonne exactement le modèle d'avant ; sinon rythme rapproché de la moyenne et niveau en service", async () => {
+  const { cur, prev } = fixtureSeasons();
+  const provider = () => fakeProvider("a", (l, year) => ({ matches: year === 2026 ? cur : prev, limited: false }));
+  const on = service([provider()]);
+  const off = service([provider()], { config: loadConfig({ FOOTBALL_DATA_API_KEY: "x", MODEL_CALIBRATION: "off" }) });
+  assert.deepEqual(off.getModelParams(), { halfLifeDays: 300, priorMatches: 10, rhythmExponent: 1, levelFactor: 1 });
+
+  const onData = await on.getLeagueData("PL");
+  const offData = await off.getLeagueData("PL");
+  const total = (fit, h, a) => {
+    const { lh, la } = expectedGoals(fit, h, a);
+    return lh + la;
+  };
+  const refit = (extra) => fitLeague(onData.finished, { now: NOW, halfLifeDays: 300, priorMatches: 10, ...extra });
+  const pairs = [["T0", "T1"], ["T2", "T7"], ["T5", "T11"], ["T9", "T3"]];
+  for (const [h, a] of pairs) {
+    assert.ok(Math.abs(total(offData.fit, h, a) - total(refit({}), h, a)) < 1e-12, "interrupteur coupé : exactement le modèle d'avant");
+    assert.ok(Math.abs(total(onData.fit, h, a) - total(refit({ rhythmExponent: 0.5 }), h, a)) < 1e-12, "correction du rythme en service");
+  }
+  const spread = (fit) => {
+    const rhythms = [...fit.teams.values()].map((t) => t.a * t.d);
+    return Math.max(...rhythms) - Math.min(...rhythms);
+  };
+  assert.ok(spread(onData.fit) < 0.6 * spread(offData.fit), `rythmes resserrés : ${spread(onData.fit)} contre ${spread(offData.fit)}`);
+
+  // Le coefficient de niveau multiplie les buts attendus des deux équipes, et seulement eux.
+  on.setModelParams({ levelFactor: 1.05 });
+  const up = (await on.getLeagueData("PL")).fit;
+  for (const [h, a] of pairs) assert.ok(Math.abs(total(up, h, a) / total(onData.fit, h, a) - 1.05) < 1e-9, `${h}-${a}`);
+  assert.equal(up.home, onData.fit.home, "l'avantage du terrain ne change pas");
 });
 
 // ---- Noms alternatifs des clubs ----

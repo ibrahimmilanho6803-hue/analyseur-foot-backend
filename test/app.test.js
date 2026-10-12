@@ -103,6 +103,27 @@ test("état : sources, IA, réglages du modèle, aucun secret", async () => {
   }
 });
 
+test("état : la correction des totaux de buts est visible, et l'interrupteur MODEL_CALIBRATION=off aussi", async () => {
+  const on = await start();
+  try {
+    const m = (await on.call("/api/status")).json.modele;
+    assert.deepEqual(m.correctionDesButs, { active: true, exposantRythme: 0.5, coefficientDeNiveau: 1 });
+    assert.equal(m.reglages.rhythmExponent, 0.5);
+    assert.equal(m.reglages.levelFactor, 1);
+    on.w.data.setModelParams({ levelFactor: 1.04 });
+    assert.equal((await on.call("/api/status")).json.modele.correctionDesButs.coefficientDeNiveau, 1.04);
+  } finally {
+    await on.close();
+  }
+  const off = await start({ env: { MODEL_CALIBRATION: "off", MODEL_RHYTHM_EXPONENT: "0.7" } });
+  try {
+    const m = (await off.call("/api/status")).json.modele;
+    assert.deepEqual(m.correctionDesButs, { active: false, exposantRythme: 1, coefficientDeNiveau: 1 });
+  } finally {
+    await off.close();
+  }
+});
+
 test("état : « avertissements » vide seulement quand tout est chargé ; sinon la raison est donnée", async () => {
   const s = await start({ env: { FOOTBALL_DATA_API_KEY: "test-fd" } });
   try {
@@ -423,9 +444,41 @@ test("GET /api/backtest : réglages d'essai bornés et signalés, valeurs illisi
     const plain = await s.call("/api/backtest");
     assert.equal(plain.json.essai, undefined);
     assert.equal(plain.json.parametres.modele.coefficientDeNiveau, 1);
-    assert.equal(plain.json.parametres.modele.exposantRythme, null);
+    assert.equal(plain.json.parametres.modele.exposantRythme, 0.5, "sans paramètre, le contrôle utilise la correction en service sur le serveur");
     assert.equal(plain.json.parametres.pasEnJours, 7);
     assert.ok(plain.json.butsParMatch.prevus > 0);
+  } finally {
+    await s.close();
+  }
+});
+
+test("GET /api/backtest : par défaut avec la correction en service ; « exposantRythme=1&echelle=1 » donne le modèle d'avant", async () => {
+  const s = await start({ aiBehaviour: "off" });
+  try {
+    s.w.data.setModelParams({ levelFactor: 1.04 });
+    const now = (await s.call("/api/backtest")).json;
+    assert.deepEqual([now.parametres.modele.exposantRythme, now.parametres.modele.coefficientDeNiveau], [0.5, 1.04]);
+    assert.equal(now.reglages.rhythmExponent, 0.5);
+    assert.equal(now.reglages.levelFactor, 1.04);
+    const before = (await s.call("/api/backtest?exposantRythme=1&echelle=1")).json;
+    assert.deepEqual([before.parametres.modele.exposantRythme, before.parametres.modele.coefficientDeNiveau], [1, 1]);
+    assert.deepEqual(before.essai, { rhythmExponent: 1, levelFactor: 1 });
+    assert.ok(now.butsParMatch.prevus > before.butsParMatch.prevus, "le coefficient relève les buts prévus");
+    assert.equal(before.reglages.levelFactor, 1.04, "les réglages en service restent indiqués à part");
+  } finally {
+    await s.close();
+  }
+});
+
+test("GET /api/backtest : un rapport gardé en mémoire ne survit pas à un changement de réglage du modèle", async () => {
+  const s = await start({ aiBehaviour: "off" });
+  try {
+    const first = (await s.call("/api/backtest")).json;
+    assert.equal(first.reglages.levelFactor, 1);
+    s.w.data.setModelParams({ levelFactor: 1.1 });
+    const second = (await s.call("/api/backtest")).json;
+    assert.equal(second.reglages.levelFactor, 1.1);
+    assert.ok(second.butsParMatch.prevus > first.butsParMatch.prevus * 1.05, `${second.butsParMatch.prevus} contre ${first.butsParMatch.prevus}`);
   } finally {
     await s.close();
   }
