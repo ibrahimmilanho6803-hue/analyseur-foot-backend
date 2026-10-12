@@ -28,7 +28,15 @@ function createDataService({ config, http, cache = new SwrCache(), now = Date.no
       })
       .filter(Boolean);
   const leagues = LEAGUES.filter((l) => list.some((p) => p.supports(l)));
-  const modelParams = { halfLifeDays: config.model.halfLifeDays, priorMatches: config.model.priorMatches };
+  // Réglages du modèle. `rhythmExponent` et `levelFactor` corrigent les totaux de buts (voir model.js et tuning.js) ;
+  // l'interrupteur MODEL_CALIBRATION=off les laisse à 1 (modèle d'avant la correction).
+  const calibrated = config.model.calibration !== false;
+  const modelParams = {
+    halfLifeDays: config.model.halfLifeDays,
+    priorMatches: config.model.priorMatches,
+    rhythmExponent: calibrated ? config.model.rhythmExponent || 1 : 1,
+    levelFactor: 1,
+  };
   const seasonCached = (p, league, year, ttlMs) =>
     cache.get(`season:${p.name}:${league.key}:${year}`, {
       ttlMs,
@@ -104,7 +112,14 @@ function createDataService({ config, http, cache = new SwrCache(), now = Date.no
     const hasPrev = prev.matches.length > 0;
     // Un club absent de la saison précédente est probablement promu : a priori un peu plus faible.
     const priorFor = (id) => (hasPrev && !prevTeams.has(id) ? { a0: 0.88, d0: 1.12 } : { a0: 1, d0: 1 });
-    const fit = fitLeague(finished, { now: nowMs, halfLifeDays: modelParams.halfLifeDays, priorMatches: modelParams.priorMatches, priorFor });
+    const fit = fitLeague(finished, {
+      now: nowMs,
+      halfLifeDays: modelParams.halfLifeDays,
+      priorMatches: modelParams.priorMatches,
+      rhythmExponent: modelParams.rhythmExponent,
+      levelFactor: modelParams.levelFactor,
+      priorFor,
+    });
     const teams = new Map();
     for (const m of all) {
       for (const t of [m.home, m.away]) {
@@ -210,10 +225,17 @@ function createDataService({ config, http, cache = new SwrCache(), now = Date.no
   }
 
   // Change les réglages du modèle (ex. après un réglage automatique) et force le recalcul des forces d'équipes.
+  // Seuls les réglages fournis (et valides) changent ; sans changement réel, rien n'est recalculé. Renvoie vrai s'il y a eu un changement.
   function setModelParams(next) {
-    modelParams.halfLifeDays = next.halfLifeDays;
-    modelParams.priorMatches = next.priorMatches;
-    cache.invalidate("league:");
+    let changed = false;
+    for (const name of Object.keys(modelParams)) {
+      const value = next[name];
+      if (typeof value !== "number" || !Number.isFinite(value) || value === modelParams[name]) continue;
+      modelParams[name] = value;
+      changed = true;
+    }
+    if (changed) cache.invalidate("league:");
+    return changed;
   }
 
   const getModelParams = () => ({ ...modelParams });

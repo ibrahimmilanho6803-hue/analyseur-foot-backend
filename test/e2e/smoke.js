@@ -107,6 +107,15 @@ async function main() {
   assert.ok(tuned.reglageAutomatique, "le réglage automatique s'est exécuté");
   console.log(`✔ réglage automatique : ${tuned.reglageAutomatique.raison} (demi-vie ${tuned.reglages.halfLifeDays} j, a priori ${tuned.reglages.priorMatches})`);
 
+  // Correction des totaux de buts : rythme des équipes rapproché de la moyenne, niveau de buts mesuré et ajusté par le réglage quotidien.
+  const niveau = tuned.reglageAutomatique.niveauDeButs;
+  assert.ok(niveau && typeof niveau.raison === "string", "le niveau de buts a été mesuré par le réglage automatique");
+  assert.equal(tuned.correctionDesButs.active, true);
+  assert.equal(tuned.correctionDesButs.exposantRythme, 0.5);
+  assert.equal(tuned.correctionDesButs.coefficientDeNiveau, tuned.reglages.levelFactor);
+  assert.ok(niveau.matchs > 100, `${niveau.matchs} matchs mesurés`);
+  console.log(`✔ correction des totaux de buts : ${niveau.raison} (coefficient ${tuned.reglages.levelFactor}, rythme ramené à ${tuned.reglages.rhythmExponent})`);
+
   assert.ok(!out.includes("fake-fd-key") && !out.includes("sk-ant-fake"), "aucune clé dans les journaux");
   console.log("\nE2E OK");
 }

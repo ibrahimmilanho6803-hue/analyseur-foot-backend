@@ -107,6 +107,7 @@ function createApp({ config, data, ai, analysis, coupons, tuner = null, now = Da
     }
     for (const [message, noms] of echecs) avertissements.push(`Chargement impossible (${noms.join(", ")}) : ${message}`);
     if (enChargement) avertissements.push(`Chargement en cours : ${enChargement} championnat(s) pas encore prêt(s).`);
+    const modelParams = data.getModelParams();
     res.json({
       service: "Analyseur Foot Pro — API",
       version: VERSION,
@@ -114,7 +115,9 @@ function createApp({ config, data, ai, analysis, coupons, tuner = null, now = Da
       ia: ai.status(),
       donnees,
       modele: {
-        reglages: data.getModelParams(),
+        reglages: modelParams,
+        // Correction des totaux de buts : rythme des équipes rapproché de la moyenne + niveau de buts ajusté chaque jour (MODEL_CALIBRATION=off la coupe).
+        correctionDesButs: { active: config.model.calibration !== false, exposantRythme: modelParams.rhythmExponent, coefficientDeNiveau: modelParams.levelFactor },
         reglageAutomatique: tuner ? tuner.status() : null,
         correctionParisAutomatiques: analysis.calibration ? { decalagePoints: Math.round(analysis.calibration.pickShift * 1000) / 10, detail: analysis.calibration.info } : null,
       },
@@ -170,9 +173,10 @@ function createApp({ config, data, ai, analysis, coupons, tuner = null, now = Da
   });
 
   // ---- Contrôle de fiabilité sur les matchs récents ----
-  // Paramètres facultatifs (lecture seule, sans effet sur les réponses du serveur) : `pas` (jours entre deux ré-ajustements) et des réglages
-  // d'essai du modèle, pour comparer plusieurs réglages sur exactement les mêmes matchs : demiVie, prior, rho, niveauDemiVie, niveauPrior,
-  // exposant, exposantForce, exposantRythme, echelle (voir model.js).
+  // Sans paramètre, le contrôle utilise les réglages en service sur le serveur, correction des totaux de buts comprise. Paramètres facultatifs
+  // (lecture seule, sans effet sur les réponses du serveur) : `pas` (jours entre deux ré-ajustements) et des réglages d'essai du modèle, pour
+  // comparer plusieurs réglages sur exactement les mêmes matchs : demiVie, prior, rho, niveauDemiVie, niveauPrior, exposant, exposantForce,
+  // exposantRythme, echelle (voir model.js). Par exemple `exposantRythme=1&echelle=1` donne le modèle d'avant la correction.
   app.get("/api/backtest", async (req, res, next) => {
     try {
       if (!consume(heavy, req, res)) return undefined;
@@ -194,7 +198,8 @@ function createApp({ config, data, ai, analysis, coupons, tuner = null, now = Da
       put("qualityExponent", optNum(req.query.exposantForce, 0.2, 1.3));
       put("rhythmExponent", optNum(req.query.exposantRythme, 0.2, 1.3));
       put("levelFactor", optNum(req.query.echelle, 0.8, 1.3));
-      const report = await backtestCache.get(`${jours}:${pas}:${keys.join(",")}:${JSON.stringify(essai)}`, {
+      // Les réglages en service font partie de la clé : un rapport gardé en mémoire ne doit pas survivre à un changement de réglage.
+      const report = await backtestCache.get(`${jours}:${pas}:${keys.join(",")}:${JSON.stringify(essai)}:${JSON.stringify(data.getModelParams())}`, {
         ttlMs: 6 * 3600000,
         errorTtlMs: 60000,
         loader: async () => {
