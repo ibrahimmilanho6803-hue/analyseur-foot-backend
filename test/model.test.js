@@ -195,3 +195,63 @@ test("calibrage : sans match, rien à calibrer (valeurs neutres conservées)", (
   const { lh, la } = expectedGoals(fit, "A", "B");
   assert.ok(lh > 0.5 && lh < 3 && la > 0.5 && la < 3);
 });
+
+test("calibrage : deux exposants égaux (force et rythme) donnent exactement le même résultat qu'un exposant unique", () => {
+  const one = fitLeague(sim.matches, { ...OPTS, strengthExponent: 0.7 });
+  const two = fitLeague(sim.matches, { ...OPTS, qualityExponent: 0.7, rhythmExponent: 0.7 });
+  assert.equal(two.base, one.base);
+  assert.equal(two.home, one.home);
+  for (const [id, t] of one.teams) assert.deepEqual(two.teams.get(id), t);
+  // Des exposants à 1 sont neutres.
+  const plain = fitLeague(sim.matches, OPTS);
+  assert.equal(calibrateFit(plain, { qualityExponent: 1, rhythmExponent: 1 }), plain);
+});
+
+test("calibrage : le rythme seul est rapproché de la moyenne, l'écart de force entre deux équipes ne change pas", () => {
+  const plain = fitLeague(sim.matches, OPTS);
+  const calm = fitLeague(sim.matches, { ...OPTS, rhythmExponent: 0.4 });
+  const ids = [...plain.teams.keys()];
+  const quality = (fit, id) => fit.teams.get(id).a / fit.teams.get(id).d;
+  const rhythm = (fit, id) => fit.teams.get(id).a * fit.teams.get(id).d;
+  const first = ids[0];
+  for (const id of ids.slice(1)) {
+    const q0 = quality(plain, id) / quality(plain, first);
+    const r0 = rhythm(plain, id) / rhythm(plain, first);
+    assert.ok(Math.abs(quality(calm, id) / quality(calm, first) / q0 - 1) < 1e-9, `force de ${id}`);
+    assert.ok(Math.abs(rhythm(calm, id) / rhythm(calm, first) / r0 ** 0.4 - 1) < 1e-9, `rythme de ${id}`);
+  }
+  const mean = (fit, key) => [...fit.teams.values()].reduce((x, t) => x + t[key], 0) / fit.teams.size;
+  assert.ok(Math.abs(mean(calm, "a") - 1) < 1e-9 && Math.abs(mean(calm, "d") - 1) < 1e-9);
+  // Sur les matchs ajustés, le total de buts attendu reste égal au total observé.
+  let expected = 0;
+  let observed = 0;
+  for (const r of calm.rows) {
+    const th = calm.teams.get(r.h);
+    const ta = calm.teams.get(r.a);
+    expected += r.w * (calm.base * calm.home * th.a * ta.d + calm.base * ta.a * th.d);
+    observed += r.w * (r.hg + r.ag);
+  }
+  assert.ok(Math.abs(expected / observed - 1) < 1e-6, `${expected} contre ${observed}`);
+  // Les totaux de buts attendus varient moins d'un match à l'autre ; le rapport domicile / extérieur, lui, est inchangé.
+  const spread = (values) => {
+    const m = values.reduce((x, y) => x + y, 0) / values.length;
+    return Math.sqrt(values.reduce((x, y) => x + (y - m) ** 2, 0) / values.length);
+  };
+  const pairs = (fit) => ids.flatMap((i) => ids.filter((j) => j !== i).map((j) => expectedGoals(fit, i, j)));
+  const totals = (fit) => pairs(fit).map((g) => g.lh + g.la);
+  const ratios = (fit) => pairs(fit).map((g) => Math.log(g.lh / g.la));
+  assert.ok(spread(totals(calm)) < 0.8 * spread(totals(plain)), `${spread(totals(calm))} contre ${spread(totals(plain))}`);
+  assert.ok(Math.abs(spread(ratios(calm)) / spread(ratios(plain)) - 1) < 1e-6);
+});
+
+test("calibrage : la force seule est rapprochée de la moyenne sans changer le rythme des équipes", () => {
+  const plain = fitLeague(sim.matches, OPTS);
+  const soft = fitLeague(sim.matches, { ...OPTS, qualityExponent: 0.5 });
+  const ids = [...plain.teams.keys()];
+  const quality = (fit, id) => fit.teams.get(id).a / fit.teams.get(id).d;
+  const rhythm = (fit, id) => fit.teams.get(id).a * fit.teams.get(id).d;
+  for (const id of ids.slice(1)) {
+    assert.ok(Math.abs(rhythm(soft, id) / rhythm(soft, ids[0]) / (rhythm(plain, id) / rhythm(plain, ids[0])) - 1) < 1e-9, `rythme de ${id}`);
+    assert.ok(Math.abs(quality(soft, id) / quality(soft, ids[0]) / (quality(plain, id) / quality(plain, ids[0])) ** 0.5 - 1) < 1e-9, `force de ${id}`);
+  }
+});

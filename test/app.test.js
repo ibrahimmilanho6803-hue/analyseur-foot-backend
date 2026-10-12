@@ -411,16 +411,19 @@ test("GET /api/backtest : rapport de fiabilité, paramètres bornés, championna
 test("GET /api/backtest : réglages d'essai bornés et signalés, valeurs illisibles ignorées", async () => {
   const s = await start({ aiBehaviour: "off" });
   try {
-    const r = await s.call("/api/backtest?pas=14&echelle=9&exposant=0.7&demiVie=200&niveauDemiVie=60&rho=abc");
+    const r = await s.call("/api/backtest?pas=14&echelle=9&exposant=0.7&demiVie=200&niveauDemiVie=60&rho=abc&exposantRythme=0.4&exposantForce=5");
     assert.equal(r.status, 200);
-    assert.deepEqual(r.json.essai, { halfLifeDays: 200, levelHalfLifeDays: 60, strengthExponent: 0.7, levelFactor: 1.3 });
+    assert.deepEqual(r.json.essai, { halfLifeDays: 200, levelHalfLifeDays: 60, strengthExponent: 0.7, qualityExponent: 1.3, rhythmExponent: 0.4, levelFactor: 1.3 });
     assert.equal(r.json.parametres.pasEnJours, 14);
     assert.equal(r.json.parametres.modele.coefficientDeNiveau, 1.3);
     assert.equal(r.json.parametres.modele.demiVieJours, 200);
+    assert.equal(r.json.parametres.modele.exposantRythme, 0.4);
+    assert.equal(r.json.parametres.modele.exposantForce, 1.3);
     assert.equal(r.json.reglages.halfLifeDays, 300, "les réglages du serveur ne sont pas modifiés par un essai");
     const plain = await s.call("/api/backtest");
     assert.equal(plain.json.essai, undefined);
     assert.equal(plain.json.parametres.modele.coefficientDeNiveau, 1);
+    assert.equal(plain.json.parametres.modele.exposantRythme, null);
     assert.equal(plain.json.parametres.pasEnJours, 7);
     assert.ok(plain.json.butsParMatch.prevus > 0);
   } finally {

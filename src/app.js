@@ -172,7 +172,7 @@ function createApp({ config, data, ai, analysis, coupons, tuner = null, now = Da
   // ---- Contrôle de fiabilité sur les matchs récents ----
   // Paramètres facultatifs (lecture seule, sans effet sur les réponses du serveur) : `pas` (jours entre deux ré-ajustements) et des réglages
   // d'essai du modèle, pour comparer plusieurs réglages sur exactement les mêmes matchs : demiVie, prior, rho, niveauDemiVie, niveauPrior,
-  // exposant, echelle (voir model.js).
+  // exposant, exposantForce, exposantRythme, echelle (voir model.js).
   app.get("/api/backtest", async (req, res, next) => {
     try {
       if (!consume(heavy, req, res)) return undefined;
@@ -191,6 +191,8 @@ function createApp({ config, data, ai, analysis, coupons, tuner = null, now = Da
       put("levelHalfLifeDays", optNum(req.query.niveauDemiVie, 0, 1500));
       put("levelPriorMatches", optNum(req.query.niveauPrior, 0, 400));
       put("strengthExponent", optNum(req.query.exposant, 0.3, 1.3));
+      put("qualityExponent", optNum(req.query.exposantForce, 0.2, 1.3));
+      put("rhythmExponent", optNum(req.query.exposantRythme, 0.2, 1.3));
       put("levelFactor", optNum(req.query.echelle, 0.8, 1.3));
       const report = await backtestCache.get(`${jours}:${pas}:${keys.join(",")}:${JSON.stringify(essai)}`, {
         ttlMs: 6 * 3600000,

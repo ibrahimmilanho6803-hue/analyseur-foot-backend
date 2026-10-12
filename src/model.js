@@ -39,26 +39,38 @@ function levelFromRows(rows, teams, weightOf, prior = null) {
 }
 
 // Réglages de sortie, appliqués après l'estimation des forces. Tous sont neutres par défaut (le résultat est alors inchangé).
-//  - strengthExponent (< 1) : rapproche les forces de la moyenne, pour corriger des probabilités trop tranchées ;
+//  - strengthExponent (< 1) : rapproche toutes les forces de la moyenne, pour corriger des probabilités trop tranchées ;
+//  - qualityExponent et rhythmExponent : la même chose, mais en séparant deux composantes de chaque équipe. La « force »
+//    (attaque ÷ défense : l'équipe est-elle meilleure que son adversaire ?) décide du 1-N-2 ; le « rythme » (attaque × défense :
+//    ses matchs comptent-ils beaucoup de buts ?) décide des totaux de buts et de « les deux équipes marquent ». Le rythme est bien plus
+//    bruité que la force : on peut le rapprocher de la moyenne (exposant < 1) sans toucher au 1-N-2. Chacun vaut strengthExponent
+//    quand il n'est pas précisé ;
 //  - levelHalfLifeDays : le niveau de buts du championnat est ré-estimé avec une mémoire plus courte que les forces
 //    (levelPriorMatches matchs fictifs au niveau de long terme évitent de suivre le bruit) ;
 //  - levelFactor : coefficient appliqué au niveau de buts (corrige un biais constant).
 // L'estimation de départ n'est pas modifiée : on peut donc essayer plusieurs réglages sur le même ajustement.
 function calibrateFit(fit, opts = {}) {
-  const s = Number.isFinite(opts.strengthExponent) && opts.strengthExponent > 0 ? opts.strengthExponent : 1;
-  const levelHalfLife = Number.isFinite(opts.levelHalfLifeDays) && opts.levelHalfLifeDays > 0 ? opts.levelHalfLifeDays : 0;
-  const factor = Number.isFinite(opts.levelFactor) && opts.levelFactor > 0 ? opts.levelFactor : 1;
-  if (s === 1 && !levelHalfLife && factor === 1) return fit;
+  const positive = (v) => (Number.isFinite(v) && v > 0 ? v : 0);
+  const s = positive(opts.strengthExponent) || 1;
+  const quality = positive(opts.qualityExponent) || s;
+  const rhythm = positive(opts.rhythmExponent) || s;
+  const levelHalfLife = positive(opts.levelHalfLifeDays);
+  const factor = positive(opts.levelFactor) || 1;
+  if (quality === 1 && rhythm === 1 && !levelHalfLife && factor === 1) return fit;
   if (!fit.rows || !fit.rows.length) return fit;
   const out = { ...fit };
 
-  if (s !== 1) {
+  if (quality !== 1 || rhythm !== 1) {
+    // Force = a/d et rythme = a·d, chacun élevé à son exposant : a' = a^p · d^q et d' = d^p · a^q avec p = (force + rythme) / 2 et
+    // q = (rythme − force) / 2. Avec deux exposants égaux à s, on retrouve a' = a^s et d' = d^s.
+    const p = (quality + rhythm) / 2;
+    const q = (rhythm - quality) / 2;
     const teams = new Map();
     let sumA = 0;
     let sumD = 0;
     for (const [id, t] of fit.teams) {
-      const a = t.a ** s;
-      const d = t.d ** s;
+      const a = t.a ** p * t.d ** q;
+      const d = t.d ** p * t.a ** q;
       teams.set(id, { ...t, a, d });
       sumA += a;
       sumD += d;
