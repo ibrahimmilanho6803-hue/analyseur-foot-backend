@@ -1,0 +1,21 @@
+# TEMPORAIRE : contrôle de la production après la mise en ligne de « tous les matchs ». Vit seulement sur une branche jetable.
+name: Vérification temporaire de la production
+
+on:
+  push:
+    branches: [verif-production-temporaire]
+
+permissions:
+  contents: read
+
+jobs:
+  verif:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Contrôle de la production
+        run: node scripts/verif-europe-temporaire.js
