@@ -84,7 +84,8 @@ function cholSolve(L, n, b) {
 // describe(id) : { leagueKey, a, d, rated } — a et d : forces du club dans son championnat (1 et 1 s'il n'en a pas)
 // leagues : [{ key, mean, sd? }] — niveau a priori de chaque championnat (toujours inclure « EUR » pour les clubs sans championnat suivi)
 function fitCross({ matches, describe, leagues, now = Date.now(), ...custom }) {
-  const o = { ...DEFAULTS, ...custom };
+  // Un réglage non renseigné (undefined) garde sa valeur par défaut : sinon il la remplacerait et tous les paramètres deviendraient NaN.
+  const o = { ...DEFAULTS, ...Object.fromEntries(Object.entries(custom).filter(([, v]) => v !== undefined)) };
   const nL = leagues.length;
   const leagueIndex = new Map(leagues.map((l, i) => [l.key, i]));
   const teamIndex = new Map(); // identifiant de club → numéro de paramètre

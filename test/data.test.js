@@ -558,6 +558,49 @@ test("annuaire : un nom de coupe qui conviendrait à deux clubs de championnat n
   assert.equal(svc.allTeams().filter((t) => t.id === "PL:two").length, 1);
 });
 
+test("annuaire : un club connu de deux coupes sous deux identifiants (deux sources de données) n'est compté qu'une fois", async () => {
+  const world = {
+    PL: mini([club("fd:1", "Arsenal FC"), club("fd:2", "Chelsea FC"), club("fd:3", "Liverpool FC")]),
+    UCL: mini([club("fd:1", "Arsenal FC"), club("fd:900", "Sparta Praha"), club("fd:901", "Slavia Praha")]),
+    UEL: mini([club("ts:700", "Arsenal"), club("ts:500", "Sparta Praha"), club("ts:501", "FC Viktoria Plzen")]),
+  };
+  const svc = service([worldProvider(world)]);
+  await svc.ensureAll({ budgetMs: 1000, scope: "essential" });
+  const teams = svc.allTeams();
+  const sparta = teams.filter((t) => /Sparta/.test(t.name));
+  assert.equal(sparta.length, 1, "un seul « Sparta Praha »");
+  assert.equal(sparta[0].id, "fd:900", "celui de la première coupe chargée");
+  assert.equal(svc.teamAliasMap().get("ts:500"), "fd:900", "l'autre numéro lui est rattaché");
+  assert.equal(svc.teamAliasMap().get("ts:700"), "fd:1", "un club de championnat désigné sous un autre numéro y reste rattaché");
+  assert.deepEqual(teams.filter((t) => !t.rated).map((t) => t.name).sort(), ["FC Viktoria Plzen", "Slavia Praha", "Sparta Praha"]);
+  assert.equal(teams.length, 6);
+});
+
+test("annuaire : un même club vu par deux sources de données n'est gardé qu'une fois, dans le championnat de son dernier match ; deux clubs de même nom chez la même source restent deux", async () => {
+  const old = JULY - 200 * DAY;
+  const hsvFd = club("fd:hsv", "Hamburger SV");
+  const hsvTs = club("ts:hsv", "Hamburger SV");
+  const unionA = club("ts:union-a", "Union");
+  const unionB = club("ts:union-b", "Union");
+  // Source A (« footballdata ») : Bundesliga, où le club joue cette saison. Source B (« thesportsdb ») : 2. Bundesliga, où il jouait avant,
+  // et le Championship, qui compte un club d'un autre pays du même nom que celui de la 2. Bundesliga.
+  const bl1 = mini([hsvFd, club("fd:b", "Bayern Munich"), club("fd:d", "Dortmund")]);
+  const bl2 = [...mini([hsvTs, club("ts:e", "Eintracht Fictive"), club("ts:f", "Fortuna Fictive"), unionA], { at: old })];
+  const elc = mini([unionB, club("ts:g", "Gloucester Fictif"), club("ts:h", "Hull Fictif")]);
+  const a = fakeProvider("footballdata", (l, year) => ({ matches: year === 2026 ? { BL1: bl1 }[l.key] || [] : [], limited: false }), { keys: ["BL1"] });
+  const b = fakeProvider("thesportsdb", (l, year) => ({ matches: year === 2026 ? { BL2: bl2, ELC: elc }[l.key] || [] : [], limited: false }), { keys: ["BL2", "ELC"] });
+  const svc = service([a, b]);
+  await svc.ensureAll({ budgetMs: 1000, scope: "all" });
+  const teams = svc.allTeams();
+  const hsv = teams.filter((t) => t.name === "Hamburger SV");
+  assert.equal(hsv.length, 1, "un seul « Hamburger SV »");
+  assert.equal(hsv[0].id, "fd:hsv");
+  assert.equal(hsv[0].leagueKey, "BL1", "le championnat de son dernier match");
+  assert.equal(svc.teamAliasMap().get("ts:hsv"), "fd:hsv");
+  assert.equal(teams.filter((t) => t.name === "Union").length, 2, "même source, deux identifiants : deux clubs différents");
+  assert.equal(svc.teamAliasMap().has("ts:union-a") || svc.teamAliasMap().has("ts:union-b"), false);
+});
+
 test("annuaire : mémorisé tant que les données ne changent pas, recalculé quand un championnat est rechargé", async () => {
   const p = worldProvider({ PL: mini([club("a", "A"), club("b", "B")]), SA: mini([club("c", "C"), club("d", "D")]) });
   const svc = service([p]);

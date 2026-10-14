@@ -34,7 +34,7 @@ Serveur Node.js (Express) de l'application **Analyseur Foot Pro**. Il calcule de
 |---|---|
 | `GET /health` | Sonde de santé (pour Render). |
 | `GET /api/status` | État des sources de données, de l'IA, des réglages du modèle (dont la correction des totaux de buts, `modele.correctionDesButs`), de la comparaison entre championnats (`europe` : niveau de chaque championnat mesuré grâce aux coupes d'Europe) et alertes éventuelles (`avertissements` = l'essentiel ; `remarques` = championnats complémentaires). |
-| `GET /api/leagues` | Compétitions suivies, avec leur `type` (`championnat` ou `coupe`) et leur `niveau` (`principal` ou `complementaire`). |
+| `GET /api/leagues` | Compétitions suivies, avec leur `type` (`championnat` ou `coupe`) et leur `niveau` (`principal` ou `complementaire`). Un interrupteur coupé (`EUROPE_ENABLED`, `EXTRA_LEAGUES_ENABLED`) retire les lignes concernées, ici comme dans `/api/status` : liste identique à celle d'avant ces fonctions. |
 | `GET /api/teams` | Liste des clubs des compétitions chargées, avec leurs écritures courantes (« PSG », « Man City »…) : sert aux suggestions de saisie du site. Les clubs connus **seulement** par une coupe d'Europe (aucun championnat suivi) ont `championnat: "EUR"`. `complet: false` tant qu'un championnat principal ou une coupe n'est pas chargé, ou qu'un complémentaire est encore en cours de chargement. Mise en cache 5 minutes par le navigateur. |
 | `POST /api/analyze` | Analyse d'une sélection `{ equipe1, equipe2, typePari }` ou de plusieurs `{ legs: [...] }` (12 maximum). **N'importe quels deux clubs connus** : même championnat, championnats différents (la réponse porte alors `comparaisonEntreChampionnats`), coupes d'Europe. Avec `"ia": false` dans le corps, réponse **rapide du seul modèle statistique** (aucun appel à l'IA, quota IA intact, `ia.statut: "non_demandee"`) : le site peut l'afficher tout de suite, puis relancer la demande avec l'IA. |
 | `GET /api/top-matches` | Les 3 meilleurs paris (3 matchs différents) des prochaines 72 h (jusqu'à 7 jours si besoin), dans les 10 championnats principaux et les coupes d'Europe (`donnees.coupesPretes`). |
@@ -111,8 +111,13 @@ pont : les **matchs de coupes d'Europe**, où des clubs de championnats différe
   `comparaisonEntreChampionnats` (`championnat1`, `championnat2`, `niveauDesChampionnatsMesure`, `message`) et l'IA est prévenue.
 - **Clubs connus seulement par une coupe** (un club chypriote ou kazakh, par exemple) : ils forment le groupe « Autres clubs
   européens » (`EUR`). Faute de championnat suivi, leur force est neutre et seul leur niveau se déduit de leurs matchs de coupe, avec un
-  a priori plus bas et plus incertain. Un club présent dans un championnat suivi et dans une coupe sous deux identifiants n'est compté
-  qu'une fois (rapprochement par le nom, uniquement quand un seul club correspond).
+  a priori plus bas et plus incertain. Un même club ne figure qu'une fois dans la liste, même s'il porte deux identifiants : un club
+  d'un championnat suivi désigné autrement par une coupe, un club vu par deux sources de données (il reste alors dans le championnat de son
+  dernier match), ou un club de coupe seulement connu de deux coupes sous deux identifiants. Le rapprochement se fait par le nom, et
+  seulement quand un seul club correspond ; deux clubs de même nom chez la même source restent deux clubs (une source donne un seul
+  identifiant à un même club).
+  Deux clubs du même championnat qui se rencontrent en coupe sont calculés par le modèle de leur championnat (pas de comparaison entre
+  championnats).
 - **Mon coupon / Auto** : n'importe quels deux clubs connus. Le nom de la compétition est celui de la coupe quand un match est
   programmé entre eux (« Ligue des champions », avec sa date), sinon « Match entre clubs de championnats différents » (ou « Match entre
   clubs européens »).
@@ -132,6 +137,11 @@ pont : les **matchs de coupes d'Europe**, où des clubs de championnats différe
 match de coupe ; les niveaux de départ des championnats sont des valeurs fixes, corrigées seulement par les matchs de coupe disponibles.
 Un championnat dont les clubs jouent peu en coupe (ou pas du tout) garde son niveau de départ, ce qui est signalé
 (`niveauDesChampionnatsMesure: false`, confiance « faible »). Les sélections nationales et les championnats absents de la liste ne sont pas couverts.
+
+**Score des matchs de coupe** : le modèle apprend sur les buts des 90 minutes. Avec football-data.org, dont le score « total » additionne la
+prolongation et les tirs au but (un 1–1 aux tirs au but y figure à 7–6), le serveur retient le score du temps réglementaire (`regularTime`) ;
+sans lui, le match est ignoré plutôt que compté avec des buts en trop. Avec TheSportsDB (la source de ce service), le score retenu est celui
+que la source publie ; qu'il contienne ou non les buts d'une prolongation n'a pas pu être vérifié (quelques matchs par saison seulement).
 
 ## Correction des totaux de buts
 

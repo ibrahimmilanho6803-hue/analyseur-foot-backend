@@ -609,9 +609,39 @@ test("état : « europe » décrit le niveau mesuré de chaque championnat, et r
   try {
     assert.deepEqual((await off.call("/api/status")).json.europe, { actif: false });
     const leagues = (await off.call("/api/leagues")).json.championnats;
-    assert.equal(leagues.find((c) => c.key === "UCL").couvert, false, "la coupe n'est plus suivie");
+    assert.equal(leagues.find((c) => c.key === "UCL"), undefined, "la coupe n'est plus suivie, ni même présentée");
+    assert.ok(leagues.some((c) => c.key === "ELC"), "les championnats complémentaires, eux, sont toujours là");
   } finally {
     await off.close();
+  }
+});
+
+test("interrupteurs coupés : /api/leagues et /api/status présentent la liste d'avant les coupes d'Europe et des championnats complémentaires", async () => {
+  const ORIGINAL = ["PL", "PD", "SA", "BL1", "FL1", "PPL", "DED", "BSA", "SPL", "BJL"];
+  const allOff = await start({ cups: true, aiBehaviour: "off", env: { EUROPE_ENABLED: "off", EXTRA_LEAGUES_ENABLED: "off" } });
+  try {
+    const leagues = (await allOff.call("/api/leagues")).json.championnats;
+    assert.deepEqual(leagues.map((c) => c.key), ORIGINAL);
+    assert.ok(leagues.every((c) => c.type === "championnat" && c.niveau === "principal"));
+    const status = (await allOff.call("/api/status")).json.donnees.championnats;
+    assert.deepEqual(status.map((c) => c.key), ORIGINAL);
+  } finally {
+    await allOff.close();
+  }
+  const cupsOnly = await start({ cups: true, aiBehaviour: "off", env: { EXTRA_LEAGUES_ENABLED: "off" } });
+  try {
+    const keys = (await cupsOnly.call("/api/leagues")).json.championnats.map((c) => c.key);
+    assert.deepEqual(keys, [...ORIGINAL, "UCL", "UEL", "UECL"]);
+  } finally {
+    await cupsOnly.close();
+  }
+  const allOn = await start({ cups: true, aiBehaviour: "off" });
+  try {
+    const rows = (await allOn.call("/api/leagues")).json.championnats;
+    assert.equal(rows.length, require("../src/leagues").LEAGUES.length, "tout activé : toutes les entrées, couvertes ou non");
+    assert.equal(rows.find((c) => c.key === "UEL").couvert, false);
+  } finally {
+    await allOn.close();
   }
 });
 

@@ -41,7 +41,10 @@ function createCoupons({ config, data, analysis, europe = null, now = Date.now, 
         const home = europe.teamRecord(f.home.id);
         const away = europe.teamRecord(f.away.id);
         if (!home || !away) continue;
-        const core = europe.core(home, away);
+        // Deux clubs du même championnat (une confrontation entre clubs anglais, par exemple) : modèle du championnat, comme pour un match
+        // saisi à la main. Seuls des clubs de championnats différents passent par la comparaison entre championnats.
+        const shared = home.rated && away.rated && home.leagueKey === away.leagueKey ? ready.find((d) => d.league.key === home.leagueKey) : null;
+        const core = shared ? computeCore(shared, home.id, away.id) : europe.core(home, away);
         if (!core || core.quality.level < Math.max(1, minLevel)) continue;
         const calibrated = core.probs.map((x) => ({ label: x.label, p: Math.max(0.01, x.p + shift) }));
         const legs = thinLegs(calibrated, { minP: top.minLegP, maxP: top.maxLegP });

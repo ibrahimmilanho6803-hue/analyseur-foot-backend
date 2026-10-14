@@ -375,6 +375,23 @@ test("Top Matchs : les matchs de Ligue des champions peuvent être proposés et 
   assert.equal(new Set(r.topMatches.map((m) => m.id)).size, 3);
 });
 
+test("Top Matchs : une confrontation de coupe entre deux clubs du même championnat est calculée par le modèle du championnat, sans mention de « championnats différents »", async () => {
+  const w = world({ fixtureHours: [] });
+  const team = (i) => ({ id: `PL:${i}`, name: ["Arsenal FC", "Chelsea FC"][i], shortName: "" });
+  // Seul match à venir : Arsenal – Chelsea en Ligue des champions (deux clubs de la Premier League).
+  w.store.UCL.cur = w.store.UCL.cur.filter((m) => m.status === "finished");
+  w.store.UCL.cur.push({ id: "UCL-PL", kickoff: NOW + 10 * HOUR, status: "scheduled", hg: null, ag: null, home: team(0), away: team(1) });
+  const r = await w.coupons.topMatches();
+  assert.equal(r.topMatches.length, 1);
+  const m = r.topMatches[0];
+  assert.equal(m.competition, "Ligue des champions");
+  assert.equal(m.comparaisonEntreChampionnats, undefined, "les deux clubs jouent dans le même championnat");
+  assert.ok(!/ne jouent pas dans le même championnat/.test(m.justification));
+  const domestic = w.analysis.computeCore(await w.data.getLeagueData("PL"), "PL:0", "PL:1");
+  close(m.butsAttendus.equipe1, domestic.lh, 0.006, "buts attendus du club qui reçoit");
+  close(m.butsAttendus.equipe2, domestic.la, 0.006, "buts attendus du club qui se déplace");
+});
+
 test("Top Matchs : championnats et coupes ensemble, jamais plus de trois matchs et jamais un match deux fois", async () => {
   const w = world();
   const r = await w.coupons.topMatches();

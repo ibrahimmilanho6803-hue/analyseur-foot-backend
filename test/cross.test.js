@@ -96,6 +96,21 @@ test("quadrature de Gauss-Hermite : poids de somme 1, moyenne 0, variance 1, mom
 });
 
 // ---------- Ajustement ----------
+test("un réglage non renseigné (undefined) garde sa valeur par défaut au lieu de tout rendre illisible", () => {
+  const w = makeWorld({ levels: LEVELS, priors: PRIORS });
+  const matches = w.simulate(150);
+  const base = fitCross({ matches, describe: w.describe, leagues: w.leagues, now: NOW });
+  const withUndefined = fitCross({ matches, describe: w.describe, leagues: w.leagues, now: NOW, halfLifeDays: undefined, leagueSd: undefined });
+  assert.ok(Number.isFinite(withUndefined.mu) && Number.isFinite(withUndefined.home));
+  for (const l of w.leagues) {
+    assert.ok(Number.isFinite(withUndefined.league(l.key).value), l.key);
+    assert.equal(withUndefined.league(l.key).value, base.league(l.key).value, "même résultat qu'avec les réglages par défaut");
+  }
+  const dh = w.describe("A0");
+  const dg = w.describe("B0");
+  assert.deepEqual(withUndefined.predict(dh, dg), base.predict(dh, dg));
+});
+
 test("sans aucun match de coupe, le modèle reste sur les niveaux a priori et le dit", () => {
   const w = makeWorld({ levels: LEVELS, priors: PRIORS });
   const fit = fitCross({ matches: [], describe: w.describe, leagues: w.leagues, now: NOW });

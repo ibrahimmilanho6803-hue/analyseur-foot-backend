@@ -54,6 +54,25 @@ test("football-data : à venir, reporté, sans score ou illisible", () => {
   assert.equal(normalizeFootballData(null), null);
 });
 
+test("football-data : après prolongation ou tirs au but, le score retenu est celui des 90 minutes (« fullTime » additionne tout)", () => {
+  const base = { utcDate: "2026-03-11T20:00:00Z", status: "FINISHED", homeTeam: team(1, "A"), awayTeam: team(2, "B") };
+  const pens = normalizeFootballData({
+    ...base,
+    id: 1,
+    score: { duration: "PENALTY_SHOOTOUT", fullTime: { home: 7, away: 6 }, regularTime: { home: 1, away: 1 }, extraTime: { home: 0, away: 0 }, penalties: { home: 6, away: 5 } },
+  });
+  assert.deepEqual([pens.status, pens.hg, pens.ag], ["finished", 1, 1]);
+  const extra = normalizeFootballData({ ...base, id: 2, score: { duration: "EXTRA_TIME", fullTime: { home: 4, away: 3 }, regularTime: { home: 3, away: 3 }, extraTime: { home: 1, away: 0 } } });
+  assert.deepEqual([extra.status, extra.hg, extra.ag], ["finished", 3, 3]);
+  // Sans « regularTime », le score total n'est pas celui des 90 minutes : mieux vaut ignorer le match que compter 7–6.
+  const unsure = normalizeFootballData({ ...base, id: 3, score: { duration: "PENALTY_SHOOTOUT", fullTime: { home: 7, away: 6 } } });
+  assert.equal(unsure.status, "other");
+  assert.equal(unsure.hg, null);
+  // Un match réglé en 90 minutes garde son score total.
+  const regular = normalizeFootballData({ ...base, id: 4, score: { duration: "REGULAR", fullTime: { home: 2, away: 0 }, regularTime: { home: 2, away: 0 } } });
+  assert.deepEqual([regular.status, regular.hg, regular.ag], ["finished", 2, 0]);
+});
+
 test("football-data : appel de la bonne adresse avec la clé en en-tête", async () => {
   const http = fakeHttp([
     {

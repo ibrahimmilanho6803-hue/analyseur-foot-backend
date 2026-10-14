@@ -87,7 +87,10 @@ function createTuner({ config, data, analysis = null, now = Date.now, log = cons
 
       if (data.setModelParams({ ...result.retenu, levelFactor: niveau.factor })) {
         // Les forces des équipes sont recalculées tout de suite (sans re-télécharger les matchs), pas à la prochaine demande.
-        await data.ensureAll({ budgetMs: 60000 });
+        // Le changement vaut pour tous les championnats en mémoire, coupes et championnats complémentaires compris : les principaux et
+        // les coupes sont rechargés ici, les complémentaires en arrière-plan (sans retarder le réglage).
+        await data.ensureAll({ budgetMs: 60000, scope: "essential" });
+        data.ensureAll({ budgetMs: 30 * 60000, scope: "extras" }).catch(() => {});
       }
       if (result.changed) {
         log.log(`[modèle] réglage retenu : demi-vie ${result.retenu.halfLifeDays} j, a priori ${result.retenu.priorMatches} matchs (${result.raison})`);

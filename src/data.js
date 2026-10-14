@@ -5,7 +5,7 @@ const { LEAGUES, byKey, isCup, seasonStartYear, OTHER_KEY } = require("./leagues
 const { fitLeague } = require("./model");
 const { createFootballData } = require("./providers/footballdata");
 const { createTheSportsDb } = require("./providers/thesportsdb");
-const { indexTeams } = require("./teams");
+const { coreOf, indexTeams } = require("./teams");
 const { redact, withTimeout } = require("./util");
 
 function explain(e) {
@@ -33,6 +33,9 @@ function createDataService({ config, http, cache = new SwrCache(), now = Date.no
   const europe = config.europe || { enabled: true, extraLeagues: true };
   const allowed = (l) => (isCup(l) ? europe.enabled : l.tier === "extra" ? europe.extraLeagues : true);
   const leagues = LEAGUES.filter((l) => allowed(l) && list.some((p) => p.supports(l)));
+  // Championnats présentés par /api/leagues et /api/status : ceux que les interrupteurs n'ont pas coupés (même si aucune source ne les couvre :
+  // ils sont alors « non couverts »). Interrupteurs coupés : la liste d'avant les coupes d'Europe et les championnats complémentaires.
+  const listed = LEAGUES.filter(allowed);
   // Lots de championnats : « core » = les 10 championnats principaux (par défaut) ; « cups » = coupes d'Europe ; « extras » =
   // championnats complémentaires ; « essential » = principaux + coupes (ce dont « Top Matchs » et les comparaisons ont besoin) ; « all ».
   const inScope = (l, scope) => {
@@ -217,22 +220,47 @@ function createDataService({ config, http, cache = new SwrCache(), now = Date.no
   //  - Un club d'une coupe qui n'est dans aucun championnat suivi reçoit la clé « EUR » (clubs européens sans championnat suivi).
   //  - Si la coupe désigne un club connu sous un autre identifiant (même nom à quelques mots sans importance près), on le rattache au
   //    club du championnat : sinon le même club apparaîtrait deux fois et son nom deviendrait « ambigu ».
+  //  - Un même club vu par deux sources de données (la Bundesliga 2 chez l'une, la Bundesliga chez l'autre) porte deux identifiants :
+  //    on garde celui de son dernier match et l'autre lui est rattaché. Deux clubs de même nom chez la MÊME source restent deux clubs
+  //    (une source donne le même identifiant au même club).
+  //  - Un club connu de deux coupes sous deux identifiants (deux sources) n'est compté qu'une fois.
   // Le résultat est gardé en mémoire tant que les données des championnats ne changent pas.
   function computeDirectory(entries) {
     const domestic = entries.filter((e) => !isCup(e.league));
-    const chosen = new Map(); // identifiant → { team, order }
+    const chosen = new Map(); // identifiant → { team, order, provider }
     domestic.forEach((e, order) => {
       for (const t of e.value.teams.values()) {
         const prev = chosen.get(t.id);
-        if (!prev || t.lastSeen > prev.team.lastSeen) chosen.set(t.id, { team: t, order });
+        if (!prev || t.lastSeen > prev.team.lastSeen) chosen.set(t.id, { team: t, order, provider: e.value.provider });
       }
     });
-    const teams = [];
+    let teams = [];
     for (const e of domestic) {
       for (const t of e.value.teams.values()) if (chosen.get(t.id).team === t) teams.push(t);
     }
-    const alias = new Map(); // identifiant dans une coupe → identifiant du club dans son championnat
+    const alias = new Map(); // identifiant d'un autre numéro → identifiant du club retenu
+    const byName = new Map();
+    for (const t of teams) {
+      const key = coreOf(t.name);
+      if (key) byName.set(key, [...(byName.get(key) || []), t]);
+    }
+    const dropped = new Set();
+    for (const group of byName.values()) {
+      if (group.length < 2) continue;
+      const kept = [];
+      for (const t of [...group].sort((a, b) => b.lastSeen - a.lastSeen || chosen.get(a.id).order - chosen.get(b.id).order)) {
+        const twin = kept.find((k) => chosen.get(k.id).provider !== chosen.get(t.id).provider);
+        if (twin) {
+          alias.set(t.id, twin.id);
+          dropped.add(t);
+        } else {
+          kept.push(t);
+        }
+      }
+    }
+    if (dropped.size) teams = teams.filter((t) => !dropped.has(t));
     const cupOnly = new Map();
+    const cupNames = new Map(); // nom comparable → identifiant du club (de coupe seulement) déjà retenu
     const cups = entries.filter((e) => isCup(e.league));
     if (cups.length) {
       const index = indexTeams(teams);
@@ -244,6 +272,13 @@ function createDataService({ config, http, cache = new SwrCache(), now = Date.no
             alias.set(t.id, same[0].id);
             continue;
           }
+          const key = coreOf(t.name);
+          const twin = key ? cupNames.get(key) : undefined;
+          if (twin) {
+            alias.set(t.id, twin);
+            continue;
+          }
+          if (key) cupNames.set(key, t.id);
           cupOnly.set(t.id, { id: t.id, name: t.name, shortName: t.shortName || "", aliases: [], leagueKey: OTHER_KEY, rated: false, lastSeen: t.lastSeen });
         }
       }
@@ -298,7 +333,7 @@ function createDataService({ config, http, cache = new SwrCache(), now = Date.no
   function status() {
     return {
       sources: list.map((p) => p.label),
-      championnats: LEAGUES.map((l) => {
+      championnats: listed.map((l) => {
         const supported = leagues.includes(l);
         const hit = supported ? cache.peek(`league:${l.key}`) : null;
         // Un championnat jamais chargé garde la raison de son dernier échec : sans elle, « pas chargé » ne dit pas pourquoi.
@@ -341,7 +376,7 @@ function createDataService({ config, http, cache = new SwrCache(), now = Date.no
 
   const getModelParams = () => ({ ...modelParams });
 
-  return { leagues, getLeagueData, peekLeague, ensureAll, allTeams, teamAliasMap, allFailed, unloadedLeagues, warmUp, status, providers: list, setModelParams, getModelParams };
+  return { leagues, listed, getLeagueData, peekLeague, ensureAll, allTeams, teamAliasMap, allFailed, unloadedLeagues, warmUp, status, providers: list, setModelParams, getModelParams };
 }
 
 module.exports = { createDataService, explain };

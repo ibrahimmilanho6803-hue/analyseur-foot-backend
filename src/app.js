@@ -6,7 +6,7 @@ const { clamp } = require("./util");
 const { createLimiter } = require("./ratelimit");
 const { runBacktestAsync } = require("./backtest");
 const { SwrCache } = require("./cache");
-const { LEAGUES, isCup, OTHER, OTHER_KEY } = require("./leagues");
+const { isCup, OTHER, OTHER_KEY } = require("./leagues");
 const { spellingsOf } = require("./teams");
 const { version: VERSION } = require("../package.json");
 
@@ -74,7 +74,7 @@ function createApp({ config, data, ai, analysis, coupons, europe = null, tuner =
   app.get("/api/leagues", (req, res) => {
     const covered = new Set(data.leagues.map((l) => l.key));
     res.json({
-      championnats: LEAGUES.map((l) => ({
+      championnats: data.listed.map((l) => ({
         key: l.key,
         nom: l.name,
         pays: l.country,
