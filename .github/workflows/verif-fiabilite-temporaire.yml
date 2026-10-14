@@ -1,0 +1,42 @@
+# TEMPORAIRE : contrôle de la règle « pari le plus fiable » sur de vrais résultats publics. Vit seulement sur une branche jetable.
+# Les prévisions sont écrites dans donnees-predictions.jsonl puis déposées sur la branche (les journaux GitHub ne sont pas lisibles depuis l'assistant).
+name: Vérification temporaire de la fiabilité
+
+on:
+  push:
+    branches: [verif-production-temporaire]
+    paths:
+      - ".github/workflows/verif-fiabilite-temporaire.yml"
+      - "scripts/verif-fiabilite-temporaire.js"
+
+permissions:
+  contents: write
+
+jobs:
+  verif:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: tous-les-types-de-paris-sans-limite-de-cote
+          path: code
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Prévisions sur de vrais résultats
+        run: |
+          set +e
+          node scripts/verif-fiabilite-temporaire.js code donnees-predictions.jsonl 2>&1 | tee rapport-fiabilite.txt
+          echo "CODE=${PIPESTATUS[0]}" >> rapport-fiabilite.txt
+          exit 0
+      - name: Déposer le rapport sur la branche
+        if: always()
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add rapport-fiabilite.txt donnees-predictions.jsonl
+          git commit -m "Rapport de contrôle de la fiabilité" || true
+          git push origin HEAD:verif-production-temporaire
