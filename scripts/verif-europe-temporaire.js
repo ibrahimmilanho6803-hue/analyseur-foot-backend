@@ -215,3 +215,4 @@ main()
     out(problems.length ? `TERMINÉ AVEC ${problems.length} PROBLÈME(S)` : "TERMINÉ SANS PROBLÈME");
     process.exit(problems.length ? 1 : 0);
   });
+// contrôle final après le premier rafraîchissement (11:18)
