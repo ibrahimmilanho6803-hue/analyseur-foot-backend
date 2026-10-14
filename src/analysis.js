@@ -4,15 +4,16 @@ const { clamp, round } = require("./util");
 const { SwrCache } = require("./cache");
 const { findTeam } = require("./teams");
 const { expectedGoals, scoreMatrix, dataQuality } = require("./model");
-const { MARKETS, resolveMarket, evaluate, describeMatrix } = require("./markets");
+const { MARKETS, resolveMarket, evaluate, describeMatrix, refundInfo } = require("./markets");
 const { OTHER_KEY } = require("./leagues");
 const { matchStats } = require("./stats");
-const { thinLegs, selectCoupon, bestForFixture } = require("./picks");
 
 const LEVELS = ["faible", "moyen", "eleve"];
 const WARNING_ODDS = "Cotes estimées (1 ÷ probabilité), sans marge de bookmaker : les cotes réelles proposées par un opérateur seront plus basses.";
 const dec = (x) => String(round(x, 1)).replace(".", ",");
 const pct1 = (p) => round(p * 100, 1);
+// Aucune probabilité affichée n'atteint 100 % : un pari n'est jamais certain.
+const MAX_SHOWN = 0.99;
 
 // Assemble les données, le modèle statistique et l'IA pour répondre aux routes.
 // `europe` (facultatif) : comparaison entre clubs de championnats différents et coupes d'Europe (europe.js). Sans lui, ou coupé par
@@ -45,7 +46,8 @@ function createAnalysis({ config, data, ai, europe = null, now = Date.now, log =
   }
 
   function modelJustification({ home, away, bet, core, stats }) {
-    const parts = [`Le modèle attend ${dec(core.lh)} but pour ${home} et ${dec(core.la)} pour ${away} : « ${bet.label} » est estimé à ${Math.round(bet.p * 100)} %.`];
+    const parts = [`Le modèle attend ${dec(core.lh)} but pour ${home} et ${dec(core.la)} pour ${away} : « ${bet.label} » est estimé à ${Math.min(99, Math.round(bet.p * 100))} %.`];
+    if (bet.refund) parts.push(`Ce pari est remboursé (mise rendue) si ${bet.refund.when} (${Math.round(bet.refund.p * 100)} % de chances) ; le pourcentage ci-dessus est celui de le gagner quand il n'est pas remboursé.`);
     const f1 = stats.statsEquipe1 && stats.statsEquipe1.forme;
     const f2 = stats.statsEquipe2 && stats.statsEquipe2.forme;
     if (f1 && f2) parts.push(`Forme récente (du plus récent au plus ancien) : ${home} ${f1}, ${away} ${f2}.`);
@@ -88,12 +90,12 @@ function createAnalysis({ config, data, ai, europe = null, now = Date.now, log =
     return { statut: "indisponible", code: r.code, message: r.message };
   };
 
-  // Probabilité finale = modèle + petite correction de l'IA (bornée, nulle pour les scores exacts).
+  // Probabilité finale = modèle + petite correction de l'IA (bornée, nulle pour les scores exacts), jamais au-dessus de 99 %.
   function finalProbability(pModel, review, exact) {
-    if (!review || exact) return { p: pModel, adjustment: 0 };
+    if (!review || exact) return { p: Math.min(pModel, MAX_SHOWN), adjustment: 0 };
     const cap = Math.min(config.anthropic.maxAdjustPoints, 0.2 * pModel * 100);
     const adjustment = clamp(review.adjustment, -cap, cap);
-    return { p: clamp(pModel + adjustment / 100, 0.01, 0.99), adjustment: round(adjustment, 1) };
+    return { p: clamp(pModel + adjustment / 100, 0.01, MAX_SHOWN), adjustment: round(adjustment, 1) };
   }
 
   // ---------- Reconnaissance des équipes ----------
@@ -253,8 +255,11 @@ function createAnalysis({ config, data, ai, europe = null, now = Date.now, log =
     const ev = evaluate(core.matrix, market);
     const pModel = ev.p;
     const exact = Boolean(market.exact);
-    const pCal = exact ? pModel : clamp(pModel + shift, 0.01, 0.99);
-    const bet = { label: market.label, p: pCal };
+    const pCal = exact ? pModel : clamp(pModel + shift, 0.01, MAX_SHOWN);
+    // Pari à ligne entière (« plus de 2 buts ») : remboursé si le total tombe exactement sur la ligne. La probabilité est alors celle de
+    // gagner quand le pari n'est pas remboursé (voir markets.js) ; la probabilité de remboursement est donnée à part.
+    const refundable = !exact && ev.push > 0;
+    const bet = { label: market.label, p: pCal, ...(refundable ? { push: ev.push, refund: { p: ev.push, when: market.refundWhen } } : {}) };
 
     let ia = { statut: !withAi && ai.enabled ? "non_demandee" : "desactivee" };
     let review = null;
@@ -295,10 +300,11 @@ function createAnalysis({ config, data, ai, europe = null, now = Date.now, log =
       date: fixture ? new Date(fixture.kickoff).toISOString() : null,
       typePari: market.label,
       probabilite: pct1(fin.p),
-      probabiliteModele: pct1(pModel),
+      probabiliteModele: pct1(Math.min(pModel, MAX_SHOWN)),
       ...(shift ? { ajustementCalibrage: round(shift * 100, 1) } : {}),
       ajustementIA: fin.adjustment,
       coteEstimee: round(1 / fin.p, 2),
+      ...(refundable ? { remboursement: refundInfo(market, ev.push) } : {}),
       niveauConfiance: confidence(core.quality, fin.p, review && review.confiance),
       justification,
       vigilance: review ? review.vigilance : "",
@@ -329,4 +335,4 @@ function createAnalysis({ config, data, ai, europe = null, now = Date.now, log =
   return { analyzeLeg, analyzeLegs, loadAll, computeCore, prepare, resolveTeams, reviewWithAi, aiPublic, finalProbability, confidence, modelJustification, calibration, setPickShift, helpers: { pct1, dec, unresolved, unresolvedFrom, crossPublic } };
 }
 
-module.exports = { createAnalysis, WARNING_ODDS };
+module.exports = { createAnalysis, WARNING_ODDS, MAX_SHOWN };

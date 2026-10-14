@@ -45,7 +45,7 @@ function line(name, v, label) {
 function buildPrompt(ctx) {
   const { home, away, competition, kickoff, bet, lh, la, outcomes, quality, stats = {} } = ctx;
   const rows = [];
-  rows.push(`Match : ${home} (domicile) contre ${away} (extérieur) — ${competition || "championnat"}${kickoff ? ` — ${new Date(kickoff).toISOString().slice(0, 10)}` : ""}`);
+  rows.push(`Match : ${home} (équipe 1, domicile) contre ${away} (équipe 2, extérieur) — ${competition || "championnat"}${kickoff ? ` — ${new Date(kickoff).toISOString().slice(0, 10)}` : ""}`);
   if (ctx.cross) {
     const c = ctx.cross;
     const alone = [c.sansChampionnat1 && home, c.sansChampionnat2 && away].filter(Boolean);
@@ -58,7 +58,9 @@ function buildPrompt(ctx) {
     );
   }
   rows.push(`Pari étudié : ${bet.label}`);
-  rows.push(`Probabilité du modèle : ${pct(bet.p)} (cote équitable ${round(1 / bet.p, 2)})`);
+  const pBet = Math.min(bet.p, 0.99); // jamais 100 % : un pari n'est jamais certain
+  rows.push(`Probabilité du modèle : ${pct(pBet)} (cote équitable ${round(1 / pBet, 2)})`);
+  if (bet.refund) rows.push(`Ce pari est remboursé (mise rendue) si ${bet.refund.when} : ${pct(bet.refund.p)} de chances. La probabilité du modèle ci-dessus est celle de le gagner quand il n'est pas remboursé.`);
   rows.push(`Buts attendus : ${home} ${round(lh, 2)} — ${away} ${round(la, 2)}`);
   if (outcomes) {
     rows.push(

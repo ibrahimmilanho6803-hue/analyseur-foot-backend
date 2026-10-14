@@ -3,6 +3,8 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { buildWorld, HOUR, NOW } = require("./world");
+const { bestForFixture } = require("../src/picks");
+const { MARKETS } = require("../src/markets");
 
 const REQUIRED = ["id", "homeTeam", "awayTeam", "competition", "date", "meilleurPari", "probabilite", "niveauConfiance", "justification", "statsHome", "statsAway"];
 
@@ -18,7 +20,7 @@ test("Top 3 : trois matchs différents, dans la fenêtre, au format attendu par 
     assert.equal(typeof m.probabilite, "number");
     assert.ok(Date.parse(m.date) > NOW && Date.parse(m.date) <= NOW + 72 * HOUR);
     assert.ok(["faible", "moyen", "eleve"].includes(m.niveauConfiance));
-    assert.ok(m.probabilite >= 50 && m.probabilite <= 93, `probabilité hors plage : ${m.probabilite}`);
+    assert.ok(m.probabilite > 50 && m.probabilite <= 99, `probabilité hors plage : ${m.probabilite}`);
     assert.ok(Math.abs(m.coteEstimee - 100 / m.probabilite) < 0.02);
   }
   // Le meilleur pari (le plus probable) en premier.
@@ -26,20 +28,65 @@ test("Top 3 : trois matchs différents, dans la fenêtre, au format attendu par 
   assert.deepEqual(ps, [...ps].sort((a, b) => b - a));
 });
 
-test("Top 3 : cote totale cohérente avec les cotes de chaque sélection et honnête sur l'objectif", async () => {
+test("Top 3 : cote totale cohérente avec les cotes de chaque sélection, sans objectif de cote", async () => {
   const r = await buildWorld().coupons.topMatches();
   const product = r.topMatches.reduce((acc, m) => acc * (100 / m.probabilite), 1);
   assert.ok(Math.abs(Number(r.coteTotale) - product) < 0.05, `${r.coteTotale} vs ${product}`);
-  assert.equal(r.objectifCoteAtteint, Number(r.coteTotale) >= r.objectifCote);
+  // Plus aucune cote visée : ni objectif, ni « objectif atteint » dans la réponse.
+  assert.ok(!("objectifCote" in r) && !("objectifCoteAtteint" in r), Object.keys(r).join(", "));
   const joint = r.topMatches.reduce((acc, m) => acc * (m.probabilite / 100), 1);
   assert.ok(Math.abs(r.probabiliteCombinee - joint * 100) < 0.2);
   assert.match(r.avertissement, /sans marge de bookmaker/);
 });
 
-test("Top 3 : l'objectif de cote est atteint quand c'est possible, en gardant la probabilité la plus haute", async () => {
-  const r = await buildWorld({ aiBehaviour: "off" }).coupons.topMatches();
-  assert.equal(r.objectifCoteAtteint, true);
-  assert.ok(Number(r.coteTotale) >= 2.5 && Number(r.coteTotale) < 3.2, `cote ${r.coteTotale}`);
+// Pari le plus probable de chaque match à venir du monde de test (calculé sans passer par coupons.js).
+async function bestOfUpcoming(w, hours) {
+  await w.analysis.loadAll();
+  const out = [];
+  for (const key of Object.keys(w.store).filter((k) => k !== "UCL")) {
+    for (const f of w.store[key].cur) {
+      if (f.status !== "scheduled" || f.kickoff <= NOW || f.kickoff > NOW + hours * HOUR) continue;
+      const r = w.analysis.resolveTeams(f.home.name, f.away.name);
+      const { core } = await w.analysis.prepare(r);
+      const best = bestForFixture(core.probs);
+      out.push({ id: f.id, best, probs: core.probs, quality: core.quality.level });
+    }
+  }
+  return out;
+}
+
+test("Top 3 : pour chaque match, le pari le plus probable, quelle que soit sa cote ; les trois matchs les plus sûrs", async () => {
+  const w = buildWorld({ aiBehaviour: "off" });
+  const r = await w.coupons.topMatches();
+  const all = await bestOfUpcoming(w, 72);
+  assert.ok(all.length >= 6);
+  const byId = new Map(all.map((x) => [x.id, x]));
+  for (const m of r.topMatches) {
+    const x = byId.get(m.id);
+    assert.ok(x, `match inconnu : ${m.id}`);
+    // Aucun autre pari de ce match n'est plus probable que celui retenu.
+    for (const q of x.probs) assert.ok(q.p <= m.probabilite / 100 + 1e-3, `${q.label} (${q.p}) plus probable que ${m.meilleurPari} (${m.probabilite} %)`);
+    assert.equal(m.meilleurPari, x.best.label);
+    assert.ok(Math.abs(m.probabilite - Math.min(x.best.p, 0.99) * 100) < 0.06, `${m.probabilite} contre ${x.best.p}`);
+    assert.equal(m.probabilite, m.probabiliteModele, "IA désactivée : aucune correction");
+  }
+  // Les trois retenus sont les trois matchs dont le meilleur pari est le plus probable (à l'avantage près des équipes bien connues : 1 point par niveau).
+  const picked = new Set(r.topMatches.map((m) => m.id));
+  const lowestPicked = Math.min(...r.topMatches.map((m) => m.probabilite / 100));
+  for (const x of all) if (!picked.has(x.id)) assert.ok(x.best.p <= lowestPicked + 0.02 + 1e-3, `${x.id} : ${x.best.label} ${x.best.p} écarté devant ${lowestPicked}`);
+  // Sans limite de cote : la cote peut être très proche de 1 ; elle reste cohérente avec la probabilité.
+  for (const m of r.topMatches) assert.ok(m.coteEstimee >= 1.01);
+});
+
+test("Top 3 : PICK_MAX_PROBABILITY plafonne la probabilité des paris retenus (facultatif, absent par défaut)", async () => {
+  const free = await buildWorld({ aiBehaviour: "off" }).coupons.topMatches();
+  assert.ok(Math.max(...free.topMatches.map((m) => m.probabilite)) > 92, "sans plafond, les paris quasi certains sont retenus");
+  const w = buildWorld({ aiBehaviour: "off", env: { PICK_MAX_PROBABILITY: "0.9" } });
+  const capped = await w.coupons.topMatches();
+  assert.equal(capped.topMatches.length, 3);
+  for (const m of capped.topMatches) assert.ok(m.probabilite <= 90, `${m.meilleurPari} : ${m.probabilite} %`);
+  const auto = await w.coupons.autoCoupon([{ equipe1: "Arsenal", equipe2: "Chelsea" }, { equipe1: "Real Madrid", equipe2: "Barcelona" }]);
+  for (const x of auto.resultats) assert.ok(x.probabilite <= 90 && x.probabilite > 50, `${x.typePari} : ${x.probabilite} %`);
 });
 
 test("Top 3 : le résultat est gardé en mémoire puis recalculé après 15 minutes", async () => {
@@ -126,7 +173,7 @@ test("Top 3 : si le recalcul échoue, la dernière sélection encore valable est
   await assert.rejects(w.coupons.topMatches(), /panne soudaine/);
 });
 
-test("coupon automatique : le pari le plus probable par match, totaux cohérents", async () => {
+test("coupon automatique : le pari le plus probable par match, quelle que soit sa cote, totaux cohérents", async () => {
   const w = buildWorld({ aiBehaviour: "off" });
   const r = await w.coupons.autoCoupon([
     { equipe1: "Arsenal", equipe2: "Chelsea" },
@@ -139,12 +186,31 @@ test("coupon automatique : le pari le plus probable par match, totaux cohérents
   assert.equal(r.resultats[2].etat, "equipe_inconnue");
   assert.equal(r.analyses, 2);
   for (const x of r.resultats.slice(0, 2)) {
-    assert.ok(x.probabilite >= 55 && x.probabilite <= 88, `p = ${x.probabilite}`);
+    assert.ok(x.probabilite > 50 && x.probabilite <= 99, `p = ${x.probabilite}`);
     assert.ok(x.typePari);
+    // C'est bien le pari le plus probable du match (comparé au calcul direct de toutes les probabilités).
+    const t = w.analysis.resolveTeams(x.equipe1, x.equipe2);
+    const { core } = await w.analysis.prepare(t);
+    const best = bestForFixture(core.probs);
+    assert.equal(x.typePari, best.label);
+    for (const q of core.probs) assert.ok(q.p <= best.p + 1e-9, `${q.label} plus probable que ${best.label}`);
   }
   const joint = (r.resultats[0].probabilite / 100) * (r.resultats[1].probabilite / 100);
   assert.ok(Math.abs(r.probabiliteCombinee - joint * 100) < 0.2);
   assert.ok(Number(r.coteTotale) > 1);
+});
+
+test("coupon automatique : le pari retenu est un pari connu ; s'il est remboursable, le cas du remboursement est indiqué", async () => {
+  const w = buildWorld({ aiBehaviour: "off" });
+  const r = await w.coupons.autoCoupon([{ equipe1: "Arsenal", equipe2: "Chelsea" }, { equipe1: "Juventus", equipe2: "Inter" }, { equipe1: "Sevilla", equipe2: "Valencia" }]);
+  const byLabel = new Map(MARKETS.map((m) => [m.label, m]));
+  for (const x of r.resultats) {
+    assert.equal(x.etat, "ok");
+    const market = byLabel.get(x.typePari);
+    assert.ok(market, x.typePari);
+    assert.equal(Boolean(x.remboursement), Boolean(market.push), `${x.typePari} : remboursement ${JSON.stringify(x.remboursement)}`);
+    if (x.remboursement) assert.ok(x.remboursement.probabilite > 0 && x.remboursement.quand);
+  }
 });
 
 test("coupon automatique : aucune sélection exploitable", async () => {

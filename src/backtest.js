@@ -2,7 +2,7 @@
 
 const { round, DAY_MS } = require("./util");
 const { fitLeague, expectedGoals, scoreMatrix } = require("./model");
-const { MARKETS, evaluateAll } = require("./markets");
+const { MARKETS, evaluateAll, settle } = require("./markets");
 const { bestForFixture } = require("./picks");
 
 // Contrôle de fiabilité « pas à pas » : pour chaque semaine récente, le modèle est ajusté
@@ -11,20 +11,20 @@ const { bestForFixture } = require("./picks");
 // championnat, sans connaître les équipes). Plus le score de Brier est bas, mieux c'est.
 
 const EVAL_LABELS = [
-  "Victoire domicile",
+  "Victoire équipe 1",
   "Match nul",
-  "Victoire extérieur",
-  "Victoire ou nul domicile",
-  "Victoire ou nul extérieur",
+  "Victoire équipe 2",
+  "Victoire ou nul équipe 1",
+  "Victoire ou nul équipe 2",
   "Plus de 1.5 buts",
   "Plus de 2.5 buts",
   "Les deux équipes marquent",
   // Marchés ajoutés pour vérifier qu'un réglage du modèle n'en abîme pas d'autres (totaux élevés, buts de chaque équipe).
   "Plus de 3.5 buts",
-  "Equipe domicile 0.5 buts plus",
-  "Equipe extérieur 0.5 buts plus",
-  "Equipe domicile 1.5 buts plus",
-  "Equipe extérieur 1.5 buts plus",
+  "Équipe 1 plus de 0.5 buts",
+  "Équipe 2 plus de 0.5 buts",
+  "Équipe 1 plus de 1.5 buts",
+  "Équipe 2 plus de 1.5 buts",
 ];
 const EVAL = EVAL_LABELS.map((label) => MARKETS.find((m) => m.label === label));
 const BINNED = 8; // seuls les 8 premiers marchés alimentent les tranches de calibration (comparables aux anciens contrôles)
@@ -43,6 +43,16 @@ function newAcc() {
     picks: { n: 0, hits: 0, sp: 0 },
     byLeague: new Map(),
   };
+}
+
+// Compte un pari choisi automatiquement une fois le score connu. Un pari remboursé (le total tombe pile sur une ligne entière) n'est ni
+// gagné ni perdu : il ne compte pas, car la probabilité annoncée est celle de gagner quand le pari n'est pas remboursé.
+function tallyPick(picks, best, hg, ag) {
+  const outcome = settle(MARKETS.find((x) => x.label === best.label), hg, ag);
+  if (outcome === "push") return;
+  picks.n++;
+  picks.sp += best.p;
+  if (outcome === "win") picks.hits++;
 }
 
 function runLeague(acc, key, finished, opts) {
@@ -113,12 +123,7 @@ function runLeague(acc, key, finished, opts) {
       local.br += br;
       // Le pari que l'application choisirait pour ce match.
       const best = bestForFixture(probs, pick);
-      if (best) {
-        const mk = MARKETS.find((x) => x.label === best.label);
-        acc.picks.n++;
-        acc.picks.sp += best.p;
-        if (mk && mk.test(m.hg, m.ag)) acc.picks.hits++;
-      }
+      if (best) tallyPick(acc.picks, best, m.hg, m.ag);
     }
   }
   acc.byLeague.set(key, local);
@@ -177,7 +182,7 @@ function report(acc, opts) {
     calibration,
     paris: acc.picks.n
       ? {
-          description: "Pari choisi automatiquement pour chaque match (le plus probable entre 55 % et 88 %)",
+          description: `Pari choisi automatiquement pour chaque match (le plus probable${opts.pick.maxP < 1 ? `, jusqu'à ${Math.round(opts.pick.maxP * 100)} %` : ", sans limite de cote"})`,
           matchs: acc.picks.n,
           probabiliteMoyennePredite: round(predicted, 3),
           tauxDeReussiteReel: round(hitRate, 3),
@@ -209,14 +214,14 @@ function report(acc, opts) {
 
 const defer = () => new Promise((resolve) => setImmediate(resolve));
 
-function prepare({ now = Date.now(), evalDays = 120, stepDays = 7, minTrain = 120, model, pick = { minP: 0.55, maxP: 0.88 } } = {}) {
+function prepare({ now = Date.now(), evalDays = 120, stepDays = 7, minTrain = 120, model, pick = {} } = {}) {
   return {
     now,
     evalDays,
     stepDays,
     minTrain,
     model: { halfLifeDays: 300, priorMatches: 10, rho: -0.08, maxGoals: 9, levelHalfLifeDays: 0, levelPriorMatches: 40, strengthExponent: 1, levelFactor: 1, ...model },
-    pick,
+    pick: { maxP: 1, ...pick },
   };
 }
 
@@ -264,4 +269,4 @@ async function tuneModel(leagues, { now = Date.now(), current, grid, model = {},
   };
 }
 
-module.exports = { runBacktest, runBacktestAsync, tuneModel, EVAL_LABELS };
+module.exports = { runBacktest, runBacktestAsync, tuneModel, tallyPick, EVAL_LABELS };

@@ -2,125 +2,122 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { thinLegs, selectCoupon, bestForFixture } = require("../src/picks");
+const { bestForFixture, selectTop } = require("../src/picks");
+const { MARKETS, evaluateAll } = require("../src/markets");
+const { scoreMatrix } = require("../src/model");
 const { mulberry32 } = require("./helpers");
 
-const leg = (label, p) => ({ label, p });
+const leg = (label, p, extra = {}) => ({ label, p, ...extra });
 
-test("thinLegs : respecte la plage et supprime les quasi-doublons en gardant le pari le plus simple", () => {
-  const probs = [
-    leg("Plus de 0.5 buts", 0.94), // trop probable
-    leg("Victoire ou nul domicile", 0.82),
-    leg("Victoire/nul domicile + 0.5 buts plus", 0.815), // quasi identique, plus compliqué
-    leg("Plus de 1.5 buts", 0.7),
-    leg("Match nul", 0.26), // trop improbable
-    leg("Les deux équipes marquent", 0.56),
-  ];
-  const out = thinLegs(probs, { minP: 0.55, maxP: 0.88 });
-  assert.deepEqual(
-    out.map((x) => x.label),
-    ["Les deux équipes marquent", "Plus de 1.5 buts", "Victoire ou nul domicile"]
-  );
+test("bestForFixture : le pari le plus probable, sans plage ni plafond de cote", () => {
+  const probs = [leg("Plus de 0.5 buts", 0.94), leg("Victoire ou nul équipe 1", 0.84), leg("Plus de 1.5 buts", 0.7), leg("Match nul", 0.25)];
+  // 94 % n'est plus écarté comme « trop probable » : c'est le pari le plus fiable, donc il est retenu.
+  assert.equal(bestForFixture(probs).label, "Plus de 0.5 buts");
+  assert.equal(bestForFixture([leg("Match nul", 0.25), leg("Score exact", 0.1)]).label, "Match nul");
+  assert.equal(bestForFixture([leg("Plus de 0.5 buts", 0.999)]).label, "Plus de 0.5 buts");
+  assert.equal(bestForFixture([]), null);
 });
 
-test("thinLegs : limite le nombre de sélections en gardant l'étalement", () => {
-  const probs = Array.from({ length: 20 }, (_, i) => leg(`Plus de ${i}.5 buts`, 0.56 + i * 0.015));
-  const out = thinLegs(probs, { minP: 0.55, maxP: 0.88, max: 5 });
-  assert.equal(out.length, 5);
-  assert.ok(out[0].p < 0.6 && out[4].p > 0.8);
+test("bestForFixture : plafond et plancher facultatifs (PICK_MAX_PROBABILITY)", () => {
+  const probs = [leg("Plus de 0.5 buts", 0.94), leg("Victoire ou nul équipe 1", 0.84), leg("Plus de 1.5 buts", 0.7), leg("Match nul", 0.25)];
+  assert.equal(bestForFixture(probs, { maxP: 0.9 }).label, "Victoire ou nul équipe 1");
+  assert.equal(bestForFixture(probs, { maxP: 0.8 }).label, "Plus de 1.5 buts");
+  assert.equal(bestForFixture(probs, { maxP: 0.94 }).label, "Plus de 0.5 buts", "le plafond est inclus");
+  assert.equal(bestForFixture(probs, { minP: 0.9 }).label, "Plus de 0.5 buts");
+  assert.equal(bestForFixture(probs, { minP: 0.95 }), null);
+  assert.equal(bestForFixture(probs, { maxP: 0.2 }), null);
 });
 
-// Brute force indépendante : meilleure probabilité conjointe qui reste sous l'objectif.
-function bruteForce(fixtures, target) {
-  let best = 0;
-  const lim = 1 / target;
-  const fs = fixtures;
-  for (let i = 0; i < fs.length; i++)
-    for (let j = i + 1; j < fs.length; j++)
-      for (let k = j + 1; k < fs.length; k++)
-        for (const a of fs[i].legs)
-          for (const b of fs[j].legs)
-            for (const c of fs[k].legs) {
-              const joint = a.p * b.p * c.p;
-              if (joint <= lim && joint > best) best = joint;
-            }
-  return best;
-}
+test("bestForFixture : à probabilité égale, le pari le plus simple ; une vraie différence l'emporte sur la simplicité", () => {
+  // Deux écritures du même événement : « plus de 0.5 buts » est plus simple.
+  const same = [leg("Au moins une équipe marque plus de 0.5 buts", 0.92), leg("Plus de 0.5 buts", 0.92)];
+  assert.equal(bestForFixture(same).label, "Plus de 0.5 buts");
+  assert.equal(bestForFixture([...same].reverse()).label, "Plus de 0.5 buts", "indépendant de l'ordre d'entrée");
+  const nearly = [leg("Plus de 0.5 buts", 0.92), leg("Au moins une équipe marque plus de 0.5 buts", 0.92 + 1e-12)];
+  assert.equal(bestForFixture(nearly).label, "Plus de 0.5 buts", "écart numérique négligeable : égalité");
+  const better = [leg("Plus de 0.5 buts", 0.92), leg("Victoire équipe 1 et plus de 2.5 buts", 0.921)];
+  assert.equal(bestForFixture(better).label, "Victoire équipe 1 et plus de 2.5 buts");
+  // Un pari inconnu de la liste des marchés perd les égalités.
+  assert.equal(bestForFixture([leg("Pari inconnu", 0.8), leg("Match nul", 0.8)]).label, "Match nul");
+  // À égalité, un pari remboursable cède la place à un pari qui ne l'est pas, même s'il est plus compliqué.
+  const tie = [leg("Moins de 1 but", 0.95, { push: 0.1 }), leg("Moins de 1.5 buts", 0.95, { push: 0 })];
+  assert.equal(bestForFixture(tie).label, "Moins de 1.5 buts");
+});
 
-function randomFixtures(count, seed) {
-  const rand = mulberry32(seed);
-  const leagues = ["PL", "PD", "SA", "BL1", "FL1"];
-  return Array.from({ length: count }, (_, i) => ({
-    id: `F${i}`,
-    leagueKey: leagues[i % leagues.length],
-    kickoff: 1000 + i,
-    quality: 2,
-    legs: Array.from({ length: 5 }, (_, j) => leg(`pari ${i}-${j}`, 0.55 + rand() * 0.33)),
-  }));
-}
+test("bestForFixture : ne modifie pas la liste reçue et rend un des éléments tels quels", () => {
+  const probs = [leg("Plus de 1.5 buts", 0.7), leg("Plus de 0.5 buts", 0.94)];
+  const copy = JSON.parse(JSON.stringify(probs));
+  const best = bestForFixture(probs);
+  assert.deepEqual(probs, copy);
+  assert.equal(best, probs[1]);
+});
 
-test("selectCoupon : trois matchs différents, objectif atteint, probabilité conjointe quasi optimale", () => {
-  for (const seed of [1, 2, 3, 4]) {
-    const fixtures = randomFixtures(12, seed);
-    const r = selectCoupon(fixtures, { count: 3, targetOdds: 2.5 });
-    assert.equal(r.legs.length, 3);
-    assert.equal(new Set(r.legs.map((l) => l.fixture.id)).size, 3, "trois matchs distincts");
-    assert.equal(r.targetReached, true);
-    assert.ok(r.joint <= 0.4 + 1e-9, `joint ${r.joint}`);
-    assert.ok(r.fairOdds >= 2.5 - 1e-9);
-    const optimum = bruteForce(fixtures, 2.5);
-    assert.ok(optimum - r.joint < 0.03, `optimum ${optimum} vs choisi ${r.joint}`);
+test("bestForFixture sur les vrais marchés : c'est bien le maximum, jamais une ligne entière remboursable", () => {
+  const rand = mulberry32(5);
+  const wholeLines = new Set(MARKETS.filter((m) => m.push).map((m) => m.label));
+  assert.equal(wholeLines.size, 14);
+  for (let i = 0; i < 400; i++) {
+    const lh = 0.25 + rand() * 3.3;
+    const la = 0.2 + rand() * 2.8;
+    const probs = evaluateAll(scoreMatrix(lh, la));
+    const best = bestForFixture(probs);
+    const max = Math.max(...probs.map((x) => x.p));
+    assert.ok(Math.abs(best.p - max) < 1e-9, `${best.label} : ${best.p} contre ${max} (λ = ${lh.toFixed(2)}, ${la.toFixed(2)})`);
+    // Une ligne entière se place entre les deux demi-lignes voisines : elle n'est jamais strictement la plus probable.
+    assert.ok(!wholeLines.has(best.label), `${best.label} (λ = ${lh.toFixed(2)}, ${la.toFixed(2)})`);
   }
 });
 
-test("selectCoupon : plus de trois sélections possibles, une seule par match", () => {
-  const r = selectCoupon(randomFixtures(8, 9), { count: 3, targetOdds: 2.5 });
-  const ids = r.legs.map((l) => l.fixture.id);
-  assert.equal(new Set(ids).size, ids.length);
-  assert.deepEqual(
-    r.legs.map((l) => l.fixture.kickoff),
-    [...r.legs.map((l) => l.fixture.kickoff)].sort((a, b) => a - b),
-    "classées par heure de coup d'envoi"
-  );
+test("bestForFixture : un favori écrasant donne un pari de l'équipe adverse « moins de », pas une cote artificielle", () => {
+  const probs = evaluateAll(scoreMatrix(3.2, 0.35));
+  const best = bestForFixture(probs);
+  assert.ok(best.p > 0.95, `${best.label} ${best.p}`);
+  const capped = bestForFixture(probs, { maxP: 0.9 });
+  assert.ok(capped.p <= 0.9 && capped.p > 0.6, `${capped.label} ${capped.p}`);
 });
 
-test("selectCoupon : si l'objectif est inatteignable, on prend la cote la plus haute et on le signale", () => {
-  const safe = Array.from({ length: 5 }, (_, i) => ({ id: `S${i}`, leagueKey: "PL", kickoff: i, quality: 2, legs: [leg("a", 0.85), leg("b", 0.8)] }));
-  const r = selectCoupon(safe, { count: 3, targetOdds: 2.5 });
-  assert.equal(r.targetReached, false);
-  assert.ok(Math.abs(r.joint - 0.8 ** 3) < 1e-9, "le trio le plus risqué possible, donc la cote la plus haute");
+const fx = (id, p, extra = {}) => ({ id, kickoff: 1000 + Number(id.slice(1)), quality: 2, best: { label: `pari ${id}`, p }, ...extra });
+
+test("selectTop : les trois matchs dont le meilleur pari est le plus probable", () => {
+  const fixtures = [fx("F1", 0.7), fx("F2", 0.95), fx("F3", 0.8), fx("F4", 0.9), fx("F5", 0.6), fx("F6", 0.85)];
+  assert.deepEqual(selectTop(fixtures, { count: 3 }).map((f) => f.id), ["F2", "F4", "F6"]);
+  assert.deepEqual(selectTop(fixtures).map((f) => f.id), ["F2", "F4", "F6"], "trois par défaut");
+  assert.deepEqual(selectTop(fixtures, { count: 1 }).map((f) => f.id), ["F2"]);
+  assert.deepEqual(selectTop(fixtures, { count: 10 }).map((f) => f.id), ["F2", "F4", "F6", "F3", "F1", "F5"]);
 });
 
-test("selectCoupon : peu de matchs disponibles", () => {
-  const two = randomFixtures(2, 3);
-  assert.equal(selectCoupon(two, { count: 3 }).legs.length, 2);
-  assert.equal(selectCoupon([], { count: 3 }).legs.length, 0);
-  const noLegs = [{ id: "x", leagueKey: "PL", kickoff: 1, quality: 2, legs: [] }];
-  assert.equal(selectCoupon(noLegs, { count: 3 }).legs.length, 0);
+test("selectTop : peu de matchs, matchs sans pari, liste vide", () => {
+  assert.deepEqual(selectTop([], { count: 3 }), []);
+  assert.deepEqual(selectTop([fx("F1", 0.8)], { count: 3 }).map((f) => f.id), ["F1"]);
+  const noBest = [{ id: "F9", kickoff: 1, quality: 2, best: null }, fx("F1", 0.8), { id: "F8", kickoff: 2, quality: 2 }];
+  assert.deepEqual(selectTop(noBest, { count: 3 }).map((f) => f.id), ["F1"]);
 });
 
-test("selectCoupon : préfère les équipes bien connues du modèle à probabilité conjointe voisine", () => {
-  const mk = (id, quality, p) => ({ id, leagueKey: "PL", kickoff: 1, quality, legs: [leg("x", p)] });
-  const fixtures = [mk("a", 2, 0.74), mk("b", 2, 0.74), mk("c", 2, 0.74), mk("d", 0, 0.74)];
-  const r = selectCoupon(fixtures, { count: 3, targetOdds: 2.5 });
-  assert.ok(!r.legs.some((l) => l.fixture.id === "d"));
+test("selectTop : à probabilité voisine, les équipes bien connues du modèle passent devant (un point par niveau)", () => {
+  const fixtures = [fx("F1", 0.9, { quality: 0 }), fx("F2", 0.895, { quality: 1 }), fx("F3", 0.89, { quality: 2 }), fx("F4", 0.88, { quality: 2 })];
+  // Scores : F1 0,90 ; F2 0,905 ; F3 0,91 ; F4 0,90 (égalité avec F1 : coup d'envoi le plus proche).
+  assert.deepEqual(selectTop(fixtures, { count: 3 }).map((f) => f.id), ["F3", "F2", "F1"]);
+  // Mais un écart de probabilité de plus de deux points ne se rattrape pas.
+  const far = [fx("F1", 0.96, { quality: 0 }), fx("F2", 0.9, { quality: 2 }), fx("F3", 0.9, { quality: 2 }), fx("F4", 0.9, { quality: 2 })];
+  assert.equal(selectTop(far, { count: 3 })[0].id, "F1");
 });
 
-test("selectCoupon : reste rapide avec beaucoup de matchs", () => {
-  const fixtures = randomFixtures(80, 11).map((f) => ({ ...f, legs: [...f.legs, leg("extra", 0.7)] }));
+test("selectTop : égalité parfaite, le match qui commence le premier ; l'entrée n'est pas modifiée", () => {
+  const a = { id: "A", kickoff: 50, quality: 2, best: { label: "x", p: 0.9 } };
+  const b = { id: "B", kickoff: 10, quality: 2, best: { label: "x", p: 0.9 } };
+  const c = { id: "C", kickoff: 30, quality: 2, best: { label: "x", p: 0.9 } };
+  const list = [a, b, c];
+  assert.deepEqual(selectTop(list, { count: 2 }).map((f) => f.id), ["B", "C"]);
+  assert.deepEqual(list.map((f) => f.id), ["A", "B", "C"]);
+});
+
+test("selectTop : même résultat qu'un tri complet indépendant, et reste rapide avec beaucoup de matchs", () => {
+  const rand = mulberry32(21);
+  const fixtures = Array.from({ length: 5000 }, (_, i) => ({ id: `F${i}`, kickoff: i, quality: Math.floor(rand() * 3), best: { label: "x", p: 0.5 + rand() * 0.49 } }));
   const t0 = Date.now();
-  const r = selectCoupon(fixtures, { count: 3, targetOdds: 2.5 });
-  assert.equal(r.legs.length, 3);
-  assert.ok(Date.now() - t0 < 2000, `trop lent : ${Date.now() - t0} ms`);
-});
-
-test("bestForFixture : le plus probable dans la plage, sinon le plus proche", () => {
-  const probs = [leg("Plus de 0.5 buts", 0.94), leg("Victoire ou nul domicile", 0.84), leg("Plus de 1.5 buts", 0.7), leg("Match nul", 0.25)];
-  assert.equal(bestForFixture(probs).label, "Victoire ou nul domicile");
-  assert.equal(bestForFixture(probs, { minP: 0.55, maxP: 0.8 }).label, "Plus de 1.5 buts");
-  assert.equal(bestForFixture([leg("Match nul", 0.25), leg("Score exact", 0.1)]).label, "Match nul");
-  assert.equal(bestForFixture([leg("Plus de 0.5 buts", 0.95)]), null);
-  // À probabilité égale, le pari le plus simple l'emporte.
-  const tie = [leg("Victoire/nul domicile + 0.5 buts plus", 0.8), leg("Victoire ou nul domicile", 0.8)];
-  assert.equal(bestForFixture(tie).label, "Victoire ou nul domicile");
+  const top = selectTop(fixtures, { count: 3 });
+  assert.ok(Date.now() - t0 < 500, `trop lent : ${Date.now() - t0} ms`);
+  const expected = [...fixtures].sort((x, y) => y.best.p + 0.01 * y.quality - (x.best.p + 0.01 * x.quality)).slice(0, 3).map((f) => f.id);
+  assert.deepEqual(top.map((f) => f.id), expected);
+  assert.equal(new Set(top.map((f) => f.id)).size, 3);
 });

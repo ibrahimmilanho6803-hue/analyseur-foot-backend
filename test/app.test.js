@@ -178,6 +178,27 @@ test("POST /api/analyze : une sélection", async () => {
   }
 });
 
+test("POST /api/analyze : les nouveaux types de paris, sous l'écriture de l'utilisateur, et le remboursement d'une ligne entière", async () => {
+  const s = await start({ aiBehaviour: "off" });
+  try {
+    const legs = ["V1 et plus de 0.5 but", "1X et Total 1 moins de 2.5 but", "Au moins une équipe va marquer plus de 1.5 but", "Plus de 2 buts", "Équipe 2 moins de 1 but", "Victoire domicile", "Plus de 4.5 buts"].map((typePari) => ({ equipe1: "Arsenal", equipe2: "Chelsea", typePari }));
+    const r = await s.call("/api/analyze", { method: "POST", body: { legs, ia: false } });
+    assert.equal(r.status, 200);
+    const out = r.json.legs;
+    assert.deepEqual(out.map((x) => x.etat), ["ok", "ok", "ok", "ok", "ok", "ok", "marche_inconnu"]);
+    assert.deepEqual(out.slice(0, 6).map((x) => x.typePari), ["Victoire équipe 1 et plus de 0.5 buts", "Victoire ou nul équipe 1 et total équipe 1 moins de 2.5 buts", "Au moins une équipe marque plus de 1.5 buts", "Plus de 2 buts", "Équipe 2 moins de 1 but", "Victoire équipe 1"]);
+    // « V1 et plus de 0.5 but » = victoire de l'équipe 1 (elle marque forcément) : même probabilité.
+    assert.equal(out[0].probabilite, out[5].probabilite);
+    // Seules les lignes entières portent un remboursement.
+    assert.deepEqual(out.slice(0, 6).map((x) => Boolean(x.remboursement)), [false, false, false, true, true, false]);
+    assert.match(out[3].remboursement.quand, /exactement 2 buts au total/);
+    assert.equal(typeof out[3].remboursement.probabilite, "number");
+    assert.ok(out[6].marchesDisponibles.includes("Plus de 3.5 buts") && !out[6].marchesDisponibles.includes("Plus de 4.5 buts"));
+  } finally {
+    await s.close();
+  }
+});
+
 test("POST /api/analyze avec ia:false : modèle seul, aucun appel à l'IA, quota IA intact", async () => {
   const s = await start({ env: { RATE_LIMIT_AI_PER_MIN: "3" } });
   try {
@@ -279,6 +300,8 @@ test("GET /api/top-matches : trois matchs au format de l'application", async () 
     assert.equal(r.json.topMatches.length, 3);
     assert.ok(r.json.topMatches[0].homeTeam && r.json.topMatches[0].meilleurPari);
     assert.ok(r.json.coteTotale);
+    // Plus d'objectif de cote : la réponse ne le mentionne plus.
+    assert.ok(!("objectifCote" in r.json) && !("objectifCoteAtteint" in r.json));
   } finally {
     await s.close();
   }
@@ -672,7 +695,10 @@ test("POST /api/auto-coupon : un coupon mêlant championnat, coupe d'Europe et c
     assert.deepEqual(r.json.resultats.map((x) => Boolean(x.comparaisonEntreChampionnats)), [false, true, true]);
     assert.deepEqual(r.json.resultats.map((x) => x.competition), ["Premier League", "Ligue des champions", "Ligue des champions"]);
     assert.equal(r.json.analyses, 3);
-    assert.ok(Number(r.json.coteTotale) > 1.5);
+    // Pari le plus probable de chaque match, quelle que soit sa cote : la cote totale est le produit des cotes estimées.
+    const product = r.json.resultats.reduce((acc, x) => acc * x.coteEstimee, 1);
+    assert.ok(Number(r.json.coteTotale) > 1 && Math.abs(Number(r.json.coteTotale) - product) < 0.02, `${r.json.coteTotale} vs ${product}`);
+    assert.ok(r.json.resultats.every((x) => x.probabilite > 50 && x.probabilite <= 99), JSON.stringify(r.json.resultats.map((x) => x.probabilite)));
   } finally {
     await s.close();
   }

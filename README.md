@@ -37,14 +37,64 @@ Serveur Node.js (Express) de l'application **Analyseur Foot Pro**. Il calcule de
 | `GET /api/leagues` | Compétitions suivies, avec leur `type` (`championnat` ou `coupe`) et leur `niveau` (`principal` ou `complementaire`). Un interrupteur coupé (`EUROPE_ENABLED`, `EXTRA_LEAGUES_ENABLED`) retire les lignes concernées, ici comme dans `/api/status` : liste identique à celle d'avant ces fonctions. |
 | `GET /api/teams` | Liste des clubs des compétitions chargées, avec leurs écritures courantes (« PSG », « Man City »…) : sert aux suggestions de saisie du site. Les clubs connus **seulement** par une coupe d'Europe (aucun championnat suivi) ont `championnat: "EUR"`. `complet: false` tant qu'un championnat principal ou une coupe n'est pas chargé, ou qu'un complémentaire est encore en cours de chargement. Mise en cache 5 minutes par le navigateur. |
 | `POST /api/analyze` | Analyse d'une sélection `{ equipe1, equipe2, typePari }` ou de plusieurs `{ legs: [...] }` (12 maximum). **N'importe quels deux clubs connus** : même championnat, championnats différents (la réponse porte alors `comparaisonEntreChampionnats`), coupes d'Europe. Avec `"ia": false` dans le corps, réponse **rapide du seul modèle statistique** (aucun appel à l'IA, quota IA intact, `ia.statut: "non_demandee"`) : le site peut l'afficher tout de suite, puis relancer la demande avec l'IA. |
-| `GET /api/top-matches` | Les 3 meilleurs paris (3 matchs différents) des prochaines 72 h (jusqu'à 7 jours si besoin), dans les 10 championnats principaux et les coupes d'Europe (`donnees.coupesPretes`). |
-| `POST /api/auto-coupon` | `{ matches: [{ equipe1, equipe2 }] }` : meilleur pari par match, pour n'importe quels clubs connus. |
+| `GET /api/top-matches` | Les 3 paris les plus fiables (3 matchs différents) des prochaines 72 h (jusqu'à 7 jours si besoin), dans les 10 championnats principaux et les coupes d'Europe (`donnees.coupesPretes`) : pour chaque match, son pari le plus probable, **quelle que soit sa cote** (voir « Choix des paris automatiques »). |
+| `POST /api/auto-coupon` | `{ matches: [{ equipe1, equipe2 }] }` : pari le plus probable par match (quelle que soit sa cote), pour n'importe quels clubs connus. |
 | `GET /api/backtest?jours=120&championnat=PL` | Rapport de fiabilité sur les matchs récents des 10 championnats principaux, ou d'un championnat précis (complémentaires compris ; pas les coupes). Voir « Contrôle de fiabilité » plus bas. |
 | `/api/analyze-simple` | **Supprimée** (410) : elle permettait à n'importe qui d'utiliser votre clé Anthropic. |
 
 Si une équipe ou un type de pari n'est pas reconnu, la réponse contient `probabilite: null`, un `etat`
 (`equipe_inconnue`, `ambigu`, `marche_inconnu`, `chargement`…) et un `message` : aucune probabilité n'est inventée. (`ligues_differentes`
 n'apparaît plus que si `EUROPE_ENABLED=off`.)
+
+## Types de paris
+
+102 types, tous calculés à partir de la **même matrice de scores** : ils sont cohérents entre eux (« plus de 2.5 » + « moins de 2.5 » = 100 %,
+« victoire équipe 1 » + « nul » + « victoire équipe 2 » = 100 %…). **Équipe 1** est l'équipe qui reçoit (domicile), **équipe 2** celle qui se
+déplace ; **1X** et **2X** sont « victoire ou nul » de l'équipe 1 et de l'équipe 2 (double chance). Le nom à envoyer dans `typePari` est le
+nom exact ci-dessous (l'application mobile et le site envoient ces noms).
+
+| Famille | Types |
+|---|---|
+| Résultat | `Victoire équipe 1`, `Victoire équipe 2`, `Match nul`, `Victoire ou nul équipe 1`, `Victoire ou nul équipe 2`, `Victoire équipe 1 ou équipe 2` |
+| Total de buts du match | `Plus de N buts` et `Moins de N buts`, N = 0.5, 1, 1.5, 2, 2.5, 3, 3.5 (`Plus de 1 but` au singulier) |
+| Les deux équipes marquent | `Les deux équipes marquent`, `Les deux équipes ne marquent pas` |
+| Total de buts d'une équipe | `Équipe 1 plus de N buts`, `Équipe 1 moins de N buts`, et de même pour l'équipe 2 ; N = 0.5, 1, 1.5, 2, 2.5 |
+| Résultat et total du match | `Victoire équipe 1 et plus de N buts` (N = 0.5, 1.5, 2.5, 3.5) ou `… et moins de N buts` (N = 1.5, 2.5, 3.5), pour les quatre résultats (équipe 1, équipe 2, victoire ou nul équipe 1, victoire ou nul équipe 2) |
+| Au moins une équipe marque | `Au moins une équipe marque plus de N buts`, N = 0.5, 1.5, 2.5, 3.5 (au moins une des deux équipes marque plus de N buts) |
+| Résultat et total de l'équipe | `Victoire équipe 1 et total équipe 1 plus de N buts` (N = 0.5, 1.5, 2.5, 3.5) ou `… moins de N buts` (N = 1.5, 2.5, 3.5), avec « victoire ou nul équipe 1 » et le total de l'équipe 1, puis « victoire (ou nul) équipe 2 » et le total de l'équipe 2 |
+| Score exact | `Score exact` : le score le plus probable (aucune correction de l'IA) |
+
+**Noms acceptés** : sans majuscules ni accents, avec la virgule décimale, les écritures courtes des opérateurs (`V1 et plus de 1.5 but`,
+`1X et Total 1 moins de 2.5 but`, `Au moins une équipe va marquer plus de 0.5 but`) et **tous les anciens noms** (« Victoire domicile »,
+« Equipe extérieur 1.5 buts plus », « Victoire/nul domicile + 2.5 buts plus »…) : une ancienne version de l'application continue de
+fonctionner, et la réponse porte le nom actuel dans `typePari`. Un nom inconnu donne `etat: "marche_inconnu"` et la liste des noms valides
+(`marchesDisponibles`). `test/markets.test.js` vérifie chaque type contre un calcul indépendant, score par score.
+
+**Lignes entières et remboursement.** « Plus de 2 buts » est **remboursé** (mise rendue, ni gagné ni perdu) si le match se termine avec
+exactement 2 buts. 14 types sont concernés : total du match à 1, 2 et 3 buts, total de chaque équipe à 1 et 2 buts, en « plus de » comme en
+« moins de ». Pour eux, `probabilite` est la probabilité de **gagner quand le pari n'est pas remboursé** (gain ÷ (1 − remboursement)) ; la cote
+estimée 1 ÷ `probabilite` est alors la cote équitable, et le produit de plusieurs probabilités reste celle d'un coupon dont les paris
+remboursés sont retirés. La probabilité du remboursement est donnée à part : `remboursement: { probabilite, quand }` (par exemple
+`{ probabilite: 16.8, quand: "le match se termine avec exactement 1 but au total" }`), et l'IA en est informée. Les demi-lignes (1.5, 2.5…)
+n'ont jamais de remboursement ; le contrôle de fiabilité ne compte pas un pari remboursé.
+
+## Choix des paris automatiques (« Top Matchs » et « Auto »)
+
+Pour chaque match, le serveur retient le pari **le plus probable** parmi tous les types, **quelle que soit sa cote** : plus d'objectif de
+cote totale (l'ancien réglage `TOP_TARGET_ODDS` est ignoré, et `objectifCote` / `objectifCoteAtteint` ont disparu de `/api/top-matches`) ni
+de fourchette de probabilité (l'ancienne fenêtre de 55 % à 88 %). « Top Matchs » garde les 3 matchs dont ce pari est le plus sûr. À
+probabilité égale, le pari le plus simple l'emporte (« plus de 0.5 buts » plutôt que « au moins une équipe marque plus de 0.5 buts »), et
+un pari remboursable cède devant un pari qui ne l'est pas. Une ligne entière ne peut jamais être la plus probable : elle se place entre
+ses deux demi-lignes voisines. Aucune probabilité affichée ne dépasse 99 %.
+
+**Ce qu'il faut savoir** : le pari le plus probable d'un match est très souvent « plus de 0.5 buts » (environ 92 à 97 %) ou un « moins de »
+d'une équipe très inférieure, avec une cote équitable de 1.03 à 1.10 ; la cote d'un opérateur sera plus basse encore et un coupon de
+plusieurs matchs rapportera peu. C'est la conséquence directe de « le plus fiable, quelle que soit la cote ». Pour écarter les paris
+quasi certains, `PICK_MAX_PROBABILITY` (par exemple `0.9`, `90` ou `90 %`, entre 50 % et 100 %) plafonne la probabilité des paris
+automatiques : le pari le plus probable **sous** le plafond est alors retenu (et les lignes entières, remboursables, peuvent apparaître).
+Sans cette variable, il n'y a aucun plafond. Le contrôle de fiabilité (`paris` dans `/api/backtest`) mesure ces paris : probabilité
+annoncée contre fréquence réelle ; si les paris se réalisent nettement moins souvent que prévu, le serveur abaisse leurs probabilités
+(jamais l'inverse).
 
 ### Reconnaissance des noms d'équipes
 
@@ -79,7 +129,8 @@ TheSportsDB, aux **noms alternatifs de chaque club** (lus automatiquement, un ap
 | `SPORTSDB_API_KEY` | Clé TheSportsDB. **Payante** pour être utile : la clé gratuite ne renvoie qu'une partie de la saison (15 matchs), elle est détectée et ignorée. Source de secours de football-data.org, et seule source pour l'Écosse et la Belgique. Peut aussi servir **seule** (voir « Couverture »). | — |
 | `DATA_PROVIDER` | Ordre des sources, ex. `footballdata,thesportsdb`. | selon les clés présentes |
 | `RATE_LIMIT_PER_MIN` / `RATE_LIMIT_AI_PER_MIN` | Demandes par minute et par adresse IP (général / analyses). | `90` / `30` |
-| `TOP_WINDOW_HOURS` / `TOP_MAX_WINDOW_HOURS` / `TOP_TARGET_ODDS` | Fenêtre du Top 3 et cote totale visée. | `72` / `168` / `2.5` |
+| `TOP_WINDOW_HOURS` / `TOP_MAX_WINDOW_HOURS` | Fenêtre du Top 3 (heures), élargie à la seconde valeur quand peu de matchs sont proches. | `72` / `168` |
+| `PICK_MAX_PROBABILITY` | **Facultatif.** Plafond de probabilité des paris choisis par « Top Matchs » et « Auto » (`0.9`, `90` ou `90 %`, entre 50 % et 100 %) pour écarter les paris quasi certains (cote proche de 1). Absent : aucun plafond, le pari le plus probable est toujours retenu. L'ancienne variable `TOP_TARGET_ODDS` n'existe plus (on peut la supprimer de Render). | aucun |
 | `MODEL_AUTOTUNE` | `false` pour désactiver le réglage automatique du modèle. | `true` |
 | `MODEL_HALF_LIFE_DAYS` / `MODEL_PRIOR_MATCHES` | Réglages de départ du modèle (affinés ensuite automatiquement). | `300` / `10` |
 | `MODEL_CALIBRATION` | **Interrupteur de sécurité** : `off` coupe la correction des totaux de buts (rythme des équipes et niveau de buts, voir plus bas) et redonne le modèle d'avant. À poser dans Render → Environment ; le service redémarre. | actif |
@@ -180,7 +231,9 @@ fréquence moyenne du championnat) et la **pente de calibrage** (`pente` : 1 = p
 tranchées). `butsParMatch` compare le total de buts annoncé et réel (avec l'écart-type des buts réels), par championnat aussi.
 Les huit premiers marchés (1-N-2, double chance, plus de 1.5 / 2.5 buts, les deux équipes marquent) alimentent aussi les
 tranches de calibrage ; cinq marchés de plus (plus de 3.5 buts, un ou deux buts de chaque équipe) servent à vérifier
-qu'un réglage n'en abîme pas d'autres.
+qu'un réglage n'en abîme pas d'autres. La section `paris` mesure les paris que « Top Matchs » et « Auto » choisiraient
+(le plus probable de chaque match, sous le plafond `PICK_MAX_PROBABILITY` s'il est défini) : probabilité moyenne annoncée, fréquence
+réelle et écart ; un pari remboursé (ligne entière) n'y est ni gagné ni perdu.
 
 Le rapport est en lecture seule et sans effet sur les réponses du serveur. Sans paramètre, il utilise les réglages en service
 (`reglages` dans la réponse), correction des totaux de buts comprise. Pour comparer des réglages **sur exactement les
@@ -224,7 +277,7 @@ complément pour être prévenu en quelques minutes d'une panne complète.
 npm ci
 cp .env.example .env     # puis renseignez les clés
 npm start                # http://localhost:3001/api/status
-npm test                 # 360+ tests automatiques (sans réseau)
+npm test                 # 410+ tests automatiques (sans réseau)
 npm run e2e              # démarre le vrai serveur avec de faux services et vérifie les routes
 ```
 
@@ -257,6 +310,8 @@ l'indique (voir ci-dessous) et les analyses répondent « données indisponibles
   elle est signalée comme moins précise et la confiance n'y est jamais « élevée ». Les sélections nationales, les coupes nationales
   et les championnats absents de `src/leagues.js` ne sont pas couverts.
 - Les sélections de plusieurs matchs sont multipliées comme si les matchs étaient indépendants.
+- Un pari très probable a une cote très basse : « le plus fiable, quelle que soit la cote » donne souvent des cotes équitables de 1.03 à 1.10, que la
+  marge d'un opérateur réduit encore. Probabilité élevée ne veut pas dire pari rentable.
 - Un modèle statistique ne « prédit » pas : il estime des fréquences. Aucun pari n'est sûr.
 
 ## Dépannage

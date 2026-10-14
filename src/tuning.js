@@ -106,7 +106,7 @@ function createTuner({ config, data, analysis = null, now = Date.now, log = cons
           evalDays: 150,
           stepDays: 7,
           model: { ...fixed, ...data.getModelParams() },
-          pick: { minP: config.top.minLegP, maxP: config.top.maxLegP },
+          pick: { maxP: config.top.maxLegP },
         });
         const cal = pickCalibration(bt.paris);
         analysis.setPickShift(cal.shift, cal.info);

@@ -53,3 +53,24 @@ test("EUROPE_HALF_LIFE_DAYS : borné entre 60 et 1500 jours, valeur illisible ig
   assert.equal(loadConfig({ EUROPE_HALF_LIFE_DAYS: "abc" }).europe.halfLifeDays, 365);
   assert.equal(loadConfig({ EUROPE_HALF_LIFE_DAYS: "" }).europe.halfLifeDays, 365);
 });
+
+test("« Top Matchs » et « Auto » : aucune cote visée, aucune plage de probabilité, aucun plafond par défaut", () => {
+  const { top } = loadConfig({});
+  assert.deepEqual(top, { count: 3, windowHours: 72, maxWindowHours: 168, maxLegP: 1, budgetMs: 25000 });
+  assert.ok(!("targetOdds" in top) && !("minLegP" in top));
+  // Un ancien réglage TOP_TARGET_ODDS encore présent sur le serveur est simplement ignoré.
+  assert.deepEqual(loadConfig({ TOP_TARGET_ODDS: "2.5" }).top, top);
+});
+
+test("PICK_MAX_PROBABILITY : plafond facultatif, écrit en 0.95, 95 ou « 95 % », borné entre 50 % et 100 %, valeur illisible = aucun plafond", () => {
+  const cap = (v) => loadConfig({ PICK_MAX_PROBABILITY: v }).top.maxLegP;
+  for (const v of ["0.95", "95", "95 %", "95%", " 95 ", "0,95"]) assert.ok(Math.abs(cap(v) - 0.95) < 1e-12, JSON.stringify(v));
+  assert.equal(cap("0.9"), 0.9);
+  assert.equal(cap("0.5"), 0.5);
+  assert.equal(cap("30"), 0.5, "un plafond trop bas laisserait trop peu de paris : borné à 50 %");
+  assert.equal(cap("0.2"), 0.5);
+  assert.equal(cap("100"), 1);
+  assert.equal(cap("1"), 1);
+  assert.equal(cap("250"), 1);
+  for (const v of [undefined, "", "abc", "0", "-5", "NaN", "Infinity"]) assert.equal(cap(v), 1, JSON.stringify(v));
+});
