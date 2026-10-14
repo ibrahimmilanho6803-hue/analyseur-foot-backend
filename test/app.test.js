@@ -41,9 +41,14 @@ test("santé et informations générales", async () => {
     assert.equal(h.headers.get("x-powered-by"), null);
     assert.equal(h.headers.get("x-content-type-options"), "nosniff");
     const l = await s.call("/api/leagues");
-    assert.equal(l.json.championnats.length, 10);
+    assert.equal(l.json.championnats.length, require("../src/leagues").LEAGUES.length);
     assert.equal(l.json.championnats.find((c) => c.key === "PL").couvert, true);
     assert.equal(l.json.championnats.find((c) => c.key === "BSA").couvert, false);
+    // Les coupes d'Europe et les championnats complémentaires sont listés, avec leur type et leur niveau (non couverts dans ce petit monde de test).
+    const ucl = l.json.championnats.find((c) => c.key === "UCL");
+    assert.deepEqual([ucl.nom, ucl.type, ucl.niveau, ucl.couvert], ["Ligue des champions", "coupe", "principal", false]);
+    const tsl = l.json.championnats.find((c) => c.key === "TSL");
+    assert.deepEqual([tsl.type, tsl.niveau], ["championnat", "complementaire"]);
   } finally {
     await s.close();
   }
@@ -506,6 +511,165 @@ test("erreurs internes : message générique, jamais de détail technique", asyn
     assert.ok(!JSON.stringify(r.json).includes("secret"));
     const nf = await s.call("/api/inexistante");
     assert.equal(nf.status, 404);
+  } finally {
+    await s.close();
+  }
+});
+
+// ---- Coupes d'Europe, championnats complémentaires, clubs de coupe seulement ----
+
+test("GET /api/teams : les clubs connus seulement par une coupe sont rangés sous « EUR », les coupes ne figurent pas comme championnats", async () => {
+  const s = await start({ cups: true, keys: ["PL", "PD", "SA", "ELC"], aiBehaviour: "off" });
+  try {
+    await s.w.data.ensureAll({ scope: "essential" });
+    const early = (await s.call("/api/teams")).json;
+    assert.equal(early.complet, false, "un championnat complémentaire est encore en cours de chargement");
+    await s.w.data.ensureAll({ scope: "all" });
+    const r = (await s.call("/api/teams")).json;
+    assert.equal(r.complet, true);
+    assert.deepEqual(r.championnats.map((c) => [c.key, c.niveau, c.charge]), [["PL", "principal", true], ["PD", "principal", true], ["SA", "principal", true], ["ELC", "complementaire", true], ["EUR", "complementaire", true]]);
+    assert.equal(r.championnats.find((c) => c.key === "EUR").nom, "Autres clubs européens");
+    assert.ok(!r.championnats.some((c) => c.key === "UCL"), "une coupe n'est pas un championnat d'origine");
+    const lonely = r.equipes.filter((e) => e.championnat === "EUR").map((e) => e.nom);
+    assert.deepEqual(lonely.sort(), ["Dinamo Imaginaire", "Olimpija Fictive", "Slovan Inventé", "Sparta Fictif"]);
+    assert.equal(r.equipes.find((e) => e.nom === "Leeds United FC").championnat, "ELC");
+    assert.equal(r.equipes.length, 48 + 4);
+    const names = r.equipes.map((e) => e.nom);
+    assert.deepEqual(names, [...names].sort((a, b) => a.localeCompare(b, "fr")));
+    assert.equal(new Set(names).size, names.length, "aucun club en double");
+  } finally {
+    await s.close();
+  }
+});
+
+test("GET /api/teams : un championnat complémentaire en échec ne rend pas la liste incomplète, un principal ou une coupe si", async () => {
+  const extraDown = await start({ cups: true, keys: ["PL", "PD", "SA", "ELC"], failing: ["ELC"], aiBehaviour: "off" });
+  try {
+    await extraDown.w.data.ensureAll({ scope: "all" });
+    const r = (await extraDown.call("/api/teams")).json;
+    assert.equal(r.complet, true);
+    assert.deepEqual(r.championnats.find((c) => c.key === "ELC"), { key: "ELC", nom: "Championship", pays: "Angleterre (2e division)", niveau: "complementaire", charge: false });
+  } finally {
+    await extraDown.close();
+  }
+  const cupDown = await start({ cups: true, failing: ["UCL"], aiBehaviour: "off" });
+  try {
+    await cupDown.w.data.ensureAll({ scope: "all" });
+    assert.equal((await cupDown.call("/api/teams")).json.complet, false, "la coupe fait partie de l'essentiel : sans elle, la liste est incomplète");
+  } finally {
+    await cupDown.close();
+  }
+});
+
+test("état : les problèmes des championnats complémentaires vont dans « remarques », pas dans « avertissements »", async () => {
+  const env = { FOOTBALL_DATA_API_KEY: "test-fd" };
+  const s = await start({ cups: true, keys: ["PL", "PD", "SA", "ELC"], failing: ["ELC"], aiBehaviour: "off", env });
+  try {
+    await s.w.data.ensureAll({ scope: "essential" });
+    const loading = (await s.call("/api/status")).json;
+    assert.deepEqual(loading.avertissements, [], "les principaux et la coupe sont prêts");
+    assert.deepEqual(loading.remarques, ["Chargement en cours : 1 championnat(s) complémentaire(s) pas encore prêt(s)."]);
+    await s.w.data.ensureAll({ scope: "extras" });
+    const down = (await s.call("/api/status")).json;
+    assert.deepEqual(down.avertissements, []);
+    assert.equal(down.remarques.length, 1);
+    assert.match(down.remarques[0], /^Chargement impossible \(Championship\) : .*source en panne/);
+    const elc = down.donnees.championnats.find((c) => c.key === "ELC");
+    assert.deepEqual([elc.type, elc.niveau, elc.etat], ["championnat", "complementaire", "echec"]);
+  } finally {
+    await s.close();
+  }
+  // à l'inverse, un championnat principal ou une coupe en panne reste un avertissement
+  const main = await start({ cups: true, failing: ["PD", "UCL"], aiBehaviour: "off", env });
+  try {
+    await main.w.data.ensureAll({ scope: "all" });
+    const st = (await main.call("/api/status")).json;
+    assert.equal(st.avertissements.length, 1);
+    assert.match(st.avertissements[0], /^Chargement impossible \(Liga, Ligue des champions\)/);
+    assert.deepEqual(st.remarques, []);
+  } finally {
+    await main.close();
+  }
+});
+
+test("état : « europe » décrit le niveau mesuré de chaque championnat, et reste sobre quand la fonction est coupée", async () => {
+  const on = await start({ cups: true, aiBehaviour: "off" });
+  try {
+    await on.w.data.ensureAll({ scope: "essential" });
+    const e = (await on.call("/api/status")).json.europe;
+    assert.equal(e.actif, true);
+    assert.deepEqual(e.coupesChargees, ["UCL"]);
+    assert.ok(e.matchsDeCoupeUtilises > 100);
+    assert.deepEqual(Object.keys(e.niveauxDesChampionnats[0]).sort(), ["key", "matchsDeCoupe", "mesure", "niveauAPriori", "niveauEstime", "nom"]);
+    assert.ok(!JSON.stringify(e).includes("test-key"));
+  } finally {
+    await on.close();
+  }
+  const off = await start({ cups: true, aiBehaviour: "off", env: { EUROPE_ENABLED: "off" } });
+  try {
+    assert.deepEqual((await off.call("/api/status")).json.europe, { actif: false });
+    const leagues = (await off.call("/api/leagues")).json.championnats;
+    assert.equal(leagues.find((c) => c.key === "UCL").couvert, false, "la coupe n'est plus suivie");
+  } finally {
+    await off.close();
+  }
+});
+
+test("POST /api/analyze : un match de Ligue des champions entre deux championnats, avec l'avertissement de comparaison", async () => {
+  const s = await start({ cups: true });
+  try {
+    const r = await s.call("/api/analyze", { method: "POST", body: { equipe1: "Arsenal", equipe2: "Real Madrid", typePari: "Victoire ou nul domicile" } });
+    assert.equal(r.status, 200);
+    assert.equal(r.json.etat, "ok");
+    assert.equal(r.json.competition, "Ligue des champions");
+    assert.equal(r.json.comparaisonEntreChampionnats.championnat1, "Premier League");
+    assert.match(r.json.comparaisonEntreChampionnats.message, /moins précise/);
+    const batch = await s.call("/api/analyze", { method: "POST", body: { legs: [{ equipe1: "Arsenal", equipe2: "Chelsea", typePari: "Match nul" }, { equipe1: "Dinamo Imaginaire", equipe2: "Sparta Fictif", typePari: "Match nul" }, { equipe1: "Arsenal", equipe2: "Zzz Inconnu", typePari: "Match nul" }] } });
+    assert.deepEqual(batch.json.legs.map((l) => l.etat), ["ok", "ok", "equipe_inconnue"]);
+    assert.equal(batch.json.legs[0].comparaisonEntreChampionnats, undefined);
+    assert.ok(batch.json.legs[1].comparaisonEntreChampionnats);
+  } finally {
+    await s.close();
+  }
+});
+
+test("POST /api/auto-coupon : un coupon mêlant championnat, coupe d'Europe et club de coupe seulement", async () => {
+  const s = await start({ cups: true, aiBehaviour: "off" });
+  try {
+    const r = await s.call("/api/auto-coupon", { method: "POST", body: { matches: [{ equipe1: "Arsenal", equipe2: "Chelsea" }, { equipe1: "Juventus", equipe2: "Chelsea" }, { equipe1: "Dinamo Imaginaire", equipe2: "Liverpool" }] } });
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.json.resultats.map((x) => x.etat), ["ok", "ok", "ok"]);
+    assert.deepEqual(r.json.resultats.map((x) => Boolean(x.comparaisonEntreChampionnats)), [false, true, true]);
+    assert.deepEqual(r.json.resultats.map((x) => x.competition), ["Premier League", "Ligue des champions", "Ligue des champions"]);
+    assert.equal(r.json.analyses, 3);
+    assert.ok(Number(r.json.coteTotale) > 1.5);
+  } finally {
+    await s.close();
+  }
+});
+
+test("GET /api/top-matches : indique les coupes prises en compte", async () => {
+  const s = await start({ cups: true, aiBehaviour: "off", fixtureHours: [] });
+  try {
+    const r = await s.call("/api/top-matches");
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.json.donnees.coupesPretes, ["UCL"]);
+    assert.ok(r.json.topMatches.every((m) => m.competition === "Ligue des champions" && m.comparaisonEntreChampionnats));
+  } finally {
+    await s.close();
+  }
+});
+
+test("GET /api/backtest : par défaut les championnats principaux, un championnat complémentaire sur demande, jamais une coupe", async () => {
+  const s = await start({ cups: true, keys: ["PL", "PD", "SA", "ELC"], aiBehaviour: "off" });
+  try {
+    const all = await s.call("/api/backtest");
+    assert.equal(all.status, 200);
+    assert.deepEqual(all.json.parChampionnat.map((c) => c.championnat).sort(), ["PD", "PL", "SA"]);
+    const elc = await s.call("/api/backtest?championnat=elc");
+    assert.equal(elc.status, 200);
+    assert.deepEqual(elc.json.parChampionnat.map((c) => c.championnat), ["ELC"]);
+    assert.equal((await s.call("/api/backtest?championnat=UCL")).status, 404);
   } finally {
     await s.close();
   }

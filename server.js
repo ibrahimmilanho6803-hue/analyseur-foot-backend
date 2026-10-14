@@ -6,6 +6,7 @@ const { loadConfig } = require("./src/config");
 const { createHttp } = require("./src/http");
 const { createDataService } = require("./src/data");
 const { createAi } = require("./src/ai");
+const { createEurope } = require("./src/europe");
 const { createAnalysis } = require("./src/analysis");
 const { createCoupons } = require("./src/coupons");
 const { createTuner } = require("./src/tuning");
@@ -20,10 +21,11 @@ if (!config.anthropic.key) log.warn("[config] ANTHROPIC_API_KEY absente : l'IA e
 const http = createHttp();
 const data = createDataService({ config, http, log });
 const ai = createAi({ config, http, log });
-const analysis = createAnalysis({ config, data, ai, log });
-const coupons = createCoupons({ config, data, analysis, log });
+const europe = createEurope({ config, data, log });
+const analysis = createAnalysis({ config, data, ai, europe, log });
+const coupons = createCoupons({ config, data, analysis, europe, log });
 const tuner = createTuner({ config, data, analysis, log });
-const app = createApp({ config, data, ai, analysis, coupons, tuner, log });
+const app = createApp({ config, data, ai, analysis, coupons, europe, tuner, log });
 
 const server = app.listen(config.port, "0.0.0.0", () => {
   log.log(`Analyseur Foot Pro API (modèle IA : ${config.anthropic.model}) — port ${config.port}`);

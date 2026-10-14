@@ -249,3 +249,47 @@ test("splitAlternates : espaces, doublons, nom du club lui-même, extrêmes et v
   const many = Array.from({ length: 30 }, (_, i) => `Nom ${i}`).join(",");
   assert.equal(splitAlternates(many, "Club").length, 12, "au plus 12 noms par club");
 });
+
+// ---- Coupes d'Europe et championnats complémentaires ----
+
+test("football-data : couvre la Ligue des champions et le Championship, pas les autres coupes ni les championnats hors offre", () => {
+  const fd = createFootballData({ http: fakeHttp([{}]), key: "k" });
+  assert.equal(fd.supports(byKey.get("UCL")), true);
+  assert.equal(fd.supports(byKey.get("ELC")), true);
+  assert.equal(fd.supports(byKey.get("UEL")), false);
+  assert.equal(fd.supports(byKey.get("UECL")), false);
+  assert.equal(fd.supports(byKey.get("TSL")), false);
+  assert.equal(createFootballData({ http: fakeHttp([{}]), key: "" }).supports(byKey.get("UCL")), false);
+});
+
+test("TheSportsDB : couvre les coupes d'Europe et les championnats complémentaires, adresse de la Ligue des champions", async () => {
+  const http = fakeHttp([{ events: null }]);
+  const tsdb = createTheSportsDb({ http, key: "KEY", now: () => NOW });
+  for (const k of ["UCL", "UEL", "UECL", "ELC", "TSL", "ARG", "NOR"]) assert.equal(tsdb.supports(byKey.get(k)), true, k);
+  await tsdb.fetchSeason(byKey.get("UCL"), 2026);
+  assert.equal(http.calls[0].url, "https://www.thesportsdb.com/api/v1/json/KEY/eventsseason.php?id=4480&s=2026-2027");
+});
+
+test("TheSportsDB : une coupe d'Europe peu fournie (début de saison) n'est pas jugée partielle avec une vraie clé, un championnat l'est", async () => {
+  const mk = (n) =>
+    Array.from({ length: n }, (_, i) => ({
+      idEvent: String(i),
+      strTimestamp: "2026-09-12T14:00:00",
+      idHomeTeam: String(1 + (i % 20)),
+      idAwayTeam: String(21 + (i % 20)),
+      strHomeTeam: "A",
+      strAwayTeam: "B",
+      intHomeScore: "1",
+      intAwayScore: "1",
+    }));
+  const season = (key, league, n) => createTheSportsDb({ http: fakeHttp([{ events: mk(n) }]), key, now: () => NOW }).fetchSeason(byKey.get(league), 2026);
+  assert.equal((await season("KEY", "UCL", 32)).limited, false, "32 matchs de coupe : normal en début de saison");
+  assert.equal((await season("KEY", "UCL", 189)).limited, false);
+  assert.equal((await season("KEY", "PL", 32)).limited, true, "un championnat compte au moins 60 matchs");
+  // les nombres de la troncature (15 ou 100 matchs) restent suspects pour une coupe aussi
+  assert.equal((await season("KEY", "UCL", 15)).limited, true);
+  assert.equal((await season("KEY", "UCL", 100)).limited, true);
+  // la clé publique de test donne des listes tronquées : toute coupe est jugée partielle
+  for (const free of ["1", "2", "3", "123"]) assert.equal((await season(free, "UCL", 32)).limited, true, `clé gratuite ${free}`);
+  assert.equal((await season("KEY", "TSL", 300)).limited, false, "championnat complémentaire complet");
+});

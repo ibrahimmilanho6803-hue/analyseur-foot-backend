@@ -27,3 +27,29 @@ test("MODEL_RHYTHM_EXPONENT : borné entre 0,2 et 1 (1 = pas de correction), val
   assert.equal(loadConfig({ MODEL_RHYTHM_EXPONENT: "abc" }).model.rhythmExponent, 0.5);
   assert.equal(loadConfig({ MODEL_RHYTHM_EXPONENT: "" }).model.rhythmExponent, 0.5);
 });
+
+test("ouverture à tous les matchs : tout est activé par défaut, mémoire des coupes d'un an", () => {
+  const { europe } = loadConfig({});
+  assert.deepEqual(europe, { enabled: true, extraLeagues: true, topCups: true, halfLifeDays: 365 });
+});
+
+test("EUROPE_ENABLED, EXTRA_LEAGUES_ENABLED, TOP_CUPS : seules les valeurs d'arrêt coupent, chaque interrupteur est indépendant", () => {
+  for (const [name, field] of [["EUROPE_ENABLED", "enabled"], ["EXTRA_LEAGUES_ENABLED", "extraLeagues"], ["TOP_CUPS", "topCups"]]) {
+    for (const off of ["off", "OFF", "false", "0", "non", "no", " off "]) {
+      assert.equal(loadConfig({ [name]: off }).europe[field], false, `${name}=${JSON.stringify(off)}`);
+    }
+    for (const on of [undefined, "", "on", "true", "1", "oui", "n'importe quoi"]) {
+      assert.equal(loadConfig({ [name]: on }).europe[field], true, `${name}=${JSON.stringify(on)}`);
+    }
+  }
+  const only = loadConfig({ TOP_CUPS: "off" }).europe;
+  assert.deepEqual([only.enabled, only.extraLeagues, only.topCups], [true, true, false]);
+});
+
+test("EUROPE_HALF_LIFE_DAYS : borné entre 60 et 1500 jours, valeur illisible ignorée", () => {
+  assert.equal(loadConfig({ EUROPE_HALF_LIFE_DAYS: "200" }).europe.halfLifeDays, 200);
+  assert.equal(loadConfig({ EUROPE_HALF_LIFE_DAYS: "5" }).europe.halfLifeDays, 60);
+  assert.equal(loadConfig({ EUROPE_HALF_LIFE_DAYS: "99999" }).europe.halfLifeDays, 1500);
+  assert.equal(loadConfig({ EUROPE_HALF_LIFE_DAYS: "abc" }).europe.halfLifeDays, 365);
+  assert.equal(loadConfig({ EUROPE_HALF_LIFE_DAYS: "" }).europe.halfLifeDays, 365);
+});

@@ -191,3 +191,97 @@ test("arguments de la ligne de commande", () => {
   assert.equal(parseArgs(["--essais=0"], {}).attempts, 1, "au moins un essai");
   assert.equal(parseArgs(["--attente=9999"], {}).delayMs, 600000, "borné");
 });
+
+// ---- Championnats complémentaires et comparaison entre championnats ----
+
+test("championnats complémentaires : jamais une alerte (ni retard de données, ni absence), seulement des notes", () => {
+  const st = healthy();
+  st.donnees.championnats.push(
+    league("TSL", "Süper Lig", { niveau: "complementaire", ageMinutes: 5000 }),
+    league("ELC", "Championship", { niveau: "complementaire", etat: "echec", charge: false, ageMinutes: null, derniereErreur: "HTTP 429" })
+  );
+  st.remarques = ["Chargement impossible (Championship) : HTTP 429"];
+  const r = evaluateStatus(st);
+  assert.deepEqual(r.problems, []);
+  assert.deepEqual(r.notes, ["Championnats complémentaires : Chargement impossible (Championship) : HTTP 429"]);
+});
+
+test("un championnat principal vieilli reste un problème même quand des complémentaires existent", () => {
+  const st = healthy();
+  st.donnees.championnats[1] = league("PD", "Liga", { ageMinutes: 600, niveau: "principal" });
+  st.donnees.championnats.push(league("TSL", "Süper Lig", { niveau: "complementaire" }));
+  assert.match(evaluateStatus(st).problems[0], /Liga : données vieilles de 10 h/);
+});
+
+test("une coupe d'Europe vieillie ou absente est un problème (elle fait partie de l'essentiel)", () => {
+  const st = healthy();
+  st.donnees.championnats.push(league("UCL", "Ligue des champions", { type: "coupe", niveau: "principal", ageMinutes: 900 }));
+  assert.match(evaluateStatus(st).problems[0], /Ligue des champions : données vieilles de 15 h/);
+});
+
+// Faux serveur qui répond à une analyse comme le ferait le vrai (avec ou sans avertissement de comparaison entre championnats).
+const crossRoutes = ({ warn = true, europe = { actif: true } } = {}) => {
+  const teams = {
+    complet: true,
+    championnats: [{ key: "PL", charge: true }, { key: "PD", charge: true }, { key: "EUR", charge: true }],
+    equipes: [
+      { nom: "Arsenal FC", championnat: "PL", noms: [] },
+      { nom: "Aston Villa FC", championnat: "PL", noms: [] },
+      { nom: "Real Madrid CF", championnat: "PD", noms: [] },
+      { nom: "Dinamo Imaginaire", championnat: "EUR", noms: [] },
+    ],
+  };
+  const status = { ...healthy(), europe };
+  return {
+    ...okRoutes(),
+    "/api/status": { body: status },
+    "/api/teams": { body: teams },
+    "/api/analyze": (n, init) => {
+      const b = JSON.parse(init.body);
+      const cross = b.equipe1 === "Arsenal FC" && b.equipe2 === "Real Madrid CF";
+      return { body: { etat: "ok", probabilite: 11.2, ...(cross && warn ? { comparaisonEntreChampionnats: { championnat1: "Premier League", championnat2: "Liga", message: "m" } } : {}) } };
+    },
+  };
+};
+
+test("comparaison entre championnats active : une seconde analyse d'essai porte sur deux clubs de championnats différents", async () => {
+  const s = fakeServer(crossRoutes());
+  const r = await controle({ base: "https://api.test", fetchImpl: s.fetchImpl, sleepImpl: noSleep });
+  assert.equal(r.ok, true, JSON.stringify(r.problems));
+  const bodies = s.calls.filter((c) => c.path === "/api/analyze").map((c) => [c.body.equipe1, c.body.equipe2, c.body.typePari, c.body.ia]);
+  assert.deepEqual(bodies, [["Arsenal FC", "Aston Villa FC", "Score exact", false], ["Arsenal FC", "Real Madrid CF", "Score exact", false]]);
+});
+
+test("comparaison entre championnats : une réponse sans l'avertissement de comparaison est un problème", async () => {
+  const s = fakeServer(crossRoutes({ warn: false }));
+  const r = await controle({ base: "https://api.test", fetchImpl: s.fetchImpl, sleepImpl: noSleep, attempts: 1 });
+  assert.equal(r.ok, false);
+  assert.match(r.problems[0], /Arsenal FC – Real Madrid CF.*ne signale pas la comparaison/);
+});
+
+test("comparaison entre championnats : une analyse d'essai entre deux championnats qui n'aboutit pas est un problème", async () => {
+  const routes = crossRoutes();
+  routes["/api/analyze"] = (n, init) => {
+    const b = JSON.parse(init.body);
+    return b.equipe2 === "Real Madrid CF" ? { body: { etat: "ligues_differentes", probabilite: null } } : { body: { etat: "ok", probabilite: 9 } };
+  };
+  const r = await controle({ base: "https://api.test", fetchImpl: fakeServer(routes).fetchImpl, sleepImpl: noSleep, attempts: 1 });
+  assert.equal(r.ok, false);
+  assert.match(r.problems[0], /entre deux championnats \(Arsenal FC – Real Madrid CF\) n'a pas abouti : ligues_differentes/);
+});
+
+test("comparaison entre championnats coupée : une seule analyse d'essai, comme avant", async () => {
+  const s = fakeServer(crossRoutes({ europe: { actif: false } }));
+  const r = await controle({ base: "https://api.test", fetchImpl: s.fetchImpl, sleepImpl: noSleep });
+  assert.equal(r.ok, true);
+  assert.equal(s.calls.filter((c) => c.path === "/api/analyze").length, 1);
+});
+
+test("comparaison entre championnats active mais un seul championnat chargé : pas de seconde analyse, pas de fausse alerte", async () => {
+  const routes = crossRoutes();
+  routes["/api/teams"] = { body: { complet: false, championnats: [{ key: "PL", charge: true }, { key: "PD", charge: false }], equipes: [{ nom: "Arsenal FC", championnat: "PL", noms: [] }, { nom: "Aston Villa FC", championnat: "PL", noms: [] }] } };
+  const s = fakeServer(routes);
+  const r = await controle({ base: "https://api.test", fetchImpl: s.fetchImpl, sleepImpl: noSleep });
+  assert.equal(r.ok, true);
+  assert.equal(s.calls.filter((c) => c.path === "/api/analyze").length, 1);
+});

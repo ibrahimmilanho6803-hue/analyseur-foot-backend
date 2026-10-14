@@ -149,9 +149,12 @@ test("ensureAll : prêts, en attente (trop lents) et en échec", async () => {
   assert.deepEqual(r.failed.map((f) => f.key), ["PD"]);
 });
 
+// Même saison simulée, mais avec des identifiants de clubs propres à chaque championnat (comme dans les vraies sources : un club n'a qu'un identifiant).
+const own = (key, matches) => matches.map((m) => ({ ...m, id: `${key}-${m.id}`, home: { ...m.home, id: `${key}:${m.home.id}` }, away: { ...m.away, id: `${key}:${m.away.id}` } }));
+
 test("allTeams et status reflètent ce qui est chargé", async () => {
   const { cur, prev } = fixtureSeasons();
-  const p = fakeProvider("fake", (l, year) => ({ matches: year === 2026 ? cur : prev, limited: false }), { keys: ["PL", "SA"] });
+  const p = fakeProvider("fake", (l, year) => ({ matches: own(l.key, year === 2026 ? cur : prev), limited: false }), { keys: ["PL", "SA"] });
   const svc = service([p]);
   assert.equal(svc.allTeams().length, 0);
   assert.equal(svc.status().championnats.find((c) => c.key === "PL").charge, false);
@@ -397,4 +400,236 @@ test("noms alternatifs : un appel qui ne répond jamais ne bloque pas non plus",
   const data = await svc.getLeagueData("PL");
   assert.equal(data.teams.size, 12);
   assert.ok(data.fit.nMatches > 200);
+});
+
+// ---- Championnats complémentaires, coupes d'Europe et annuaire des clubs ----
+
+// Petit championnat (ou coupe) fait main : `clubs` = [{ id, name }], chacun reçoit chacun, scores variés. Tous les matchs sont joués
+// dans la saison en cours (sauf `at`, date de départ choisie pour contrôler le « dernier match » de chaque club).
+function mini(clubs, { at = JULY + 20 * DAY, upcoming = [] } = {}) {
+  const matches = [];
+  let k = 0;
+  for (const h of clubs) {
+    for (const g of clubs) {
+      if (h === g) continue;
+      matches.push({ id: `${h.id}>${g.id}`, kickoff: at + k++ * 3600000, status: "finished", hg: (k * 7) % 4, ag: (k * 5) % 3, home: { id: h.id, name: h.name }, away: { id: g.id, name: g.name } });
+    }
+  }
+  upcoming.forEach(([h, g], i) => matches.push({ id: `${h.id}>${g.id}#a`, kickoff: NOW + (i + 1) * DAY, status: "scheduled", hg: null, ag: null, home: { id: h.id, name: h.name }, away: { id: g.id, name: g.name } }));
+  return matches;
+}
+const club = (id, name) => ({ id, name });
+// Source de test : `world[clé de championnat]` = matchs de la saison en cours (la saison précédente est vide).
+const worldProvider = (world, { keys = Object.keys(world) } = {}) => fakeProvider("fake", (l, year) => ({ matches: year === 2026 ? world[l.key] || [] : [], limited: false }), { keys });
+const loadedKeys = (p) => [...new Set(p.calls.map((c) => c.league))].sort();
+
+test("lots de chargement : championnats principaux par défaut, puis coupes, complémentaires, essentiel, tout", async () => {
+  const world = { PL: mini([club("a", "A"), club("b", "B"), club("c", "C")]), SA: mini([club("d", "D"), club("e", "E"), club("f", "F")]), UCL: mini([club("a", "A"), club("d", "D"), club("x", "X")]), UEL: mini([club("b", "B"), club("e", "E"), club("y", "Y")]), ELC: mini([club("g", "G"), club("h", "H"), club("i", "I")]), TSL: mini([club("j", "J"), club("k", "K"), club("l", "L")]) };
+  const run = async (opts) => {
+    const p = worldProvider(world);
+    const svc = service([p]);
+    const r = await svc.ensureAll({ budgetMs: 1000, ...opts });
+    return { loaded: loadedKeys(p), ready: r.ready.map((d) => d.league.key) };
+  };
+  assert.deepEqual((await run({})).loaded, ["PL", "SA"], "par défaut : championnats principaux, sans les coupes");
+  assert.deepEqual((await run({ scope: "core" })).loaded, ["PL", "SA"]);
+  assert.deepEqual((await run({ scope: "cups" })).loaded, ["UCL", "UEL"]);
+  assert.deepEqual((await run({ scope: "extras" })).loaded, ["ELC", "TSL"]);
+  assert.deepEqual((await run({ scope: "essential" })).loaded, ["PL", "SA", "UCL", "UEL"]);
+  assert.deepEqual((await run({ scope: "all" })).loaded, ["ELC", "PL", "SA", "TSL", "UCL", "UEL"]);
+  assert.deepEqual((await run({ keys: ["TSL"] })).loaded, ["TSL"], "des championnats précis, quel que soit leur lot");
+  assert.deepEqual((await run({ keys: ["UCL", "PL"], scope: "extras" })).ready, ["PL", "UCL"], "les clés précisées l'emportent sur le lot");
+});
+
+test("interrupteurs : EUROPE_ENABLED=off retire les coupes, EXTRA_LEAGUES_ENABLED=off retire les championnats complémentaires", () => {
+  const keys = ["PL", "SA", "UCL", "UEL", "UECL", "ELC", "TSL", "BL2"];
+  const make = (env) => service([worldProvider({}, { keys })], { config: loadConfig({ FOOTBALL_DATA_API_KEY: "x", ...env }) }).leagues.map((l) => l.key);
+  assert.deepEqual(make({}), ["PL", "SA", "UCL", "UEL", "UECL", "ELC", "BL2", "TSL"]);
+  assert.deepEqual(make({ EUROPE_ENABLED: "off" }), ["PL", "SA", "ELC", "BL2", "TSL"]);
+  assert.deepEqual(make({ EXTRA_LEAGUES_ENABLED: "off" }), ["PL", "SA", "UCL", "UEL", "UECL"]);
+  assert.deepEqual(make({ EUROPE_ENABLED: "off", EXTRA_LEAGUES_ENABLED: "off" }), ["PL", "SA"]);
+  // une source qui ne couvre pas un championnat ne le rend pas disponible, interrupteur ou non
+  assert.deepEqual(service([worldProvider({}, { keys: ["PL", "UCL"] })]).leagues.map((l) => l.key), ["PL", "UCL"]);
+});
+
+test("status : chaque entrée dit si c'est un championnat ou une coupe, principal ou complémentaire", async () => {
+  const svc = service([worldProvider({ PL: mini([club("a", "A"), club("b", "B")]), UCL: mini([club("a", "A"), club("x", "X")]), ELC: mini([club("g", "G"), club("h", "H")]) })]);
+  const rows = Object.fromEntries(svc.status().championnats.map((c) => [c.key, c]));
+  assert.deepEqual([rows.PL.type, rows.PL.niveau], ["championnat", "principal"]);
+  assert.deepEqual([rows.UCL.type, rows.UCL.niveau], ["coupe", "principal"]);
+  assert.deepEqual([rows.ELC.type, rows.ELC.niveau], ["championnat", "complementaire"]);
+  assert.equal(rows.UEL.etat, "non_couvert");
+  assert.equal(svc.status().championnats.length, require("../src/leagues").LEAGUES.length);
+});
+
+test("peekLeague : rien avant le chargement, les données ensuite, et ne déclenche jamais de chargement", async () => {
+  const p = worldProvider({ PL: mini([club("a", "A"), club("b", "B")]) });
+  const svc = service([p]);
+  assert.equal(svc.peekLeague("PL"), null);
+  assert.equal(svc.peekLeague("inconnu"), null);
+  assert.equal(p.calls.length, 0, "aucun appel à la source");
+  const loaded = await svc.getLeagueData("PL");
+  assert.equal(svc.peekLeague("PL"), loaded);
+});
+
+test("une coupe ne reçoit pas de force de championnat : ses clubs sont notés « sans force », ceux d'un championnat « avec »", async () => {
+  const p = worldProvider({ PL: mini([club("a", "Arsenal"), club("b", "Chelsea")]), UCL: mini([club("a", "Arsenal"), club("x", "Slavia")]) });
+  const svc = service([p]);
+  const pl = await svc.getLeagueData("PL");
+  const ucl = await svc.getLeagueData("UCL");
+  assert.ok(pl.fit && pl.fit.teams.get("a"));
+  assert.equal(ucl.fit, null);
+  assert.ok([...pl.teams.values()].every((t) => t.rated === true && t.leagueKey === "PL" && t.lastSeen > 0));
+  assert.ok([...ucl.teams.values()].every((t) => t.rated === false && t.leagueKey === "UCL"));
+  assert.equal(ucl.league.kind, "cup");
+  assert.ok(ucl.finished.length > 0);
+});
+
+test("annuaire : un club relégué ou promu est dans le championnat où il a joué en dernier, et une seule fois", async () => {
+  // « Descendu » jouait en Premier League la saison précédente (matchs anciens) et joue maintenant en Championship ; « Monté » l'inverse.
+  const old = JULY - 200 * DAY;
+  const descendu = club("PL:descendu", "Club Descendu");
+  const monte = club("ELC:monte", "Club Monté");
+  const plBase = [club("PL:1", "Un"), club("PL:2", "Deux"), club("PL:3", "Trois")];
+  const elcBase = [club("ELC:1", "Quatre"), club("ELC:2", "Cinq"), club("ELC:3", "Six")];
+  const world = {
+    PL: [...mini([...plBase, monte]), ...mini([descendu, plBase[0]], { at: old })], // « Monté » joue en PL cette saison, « Descendu » seulement avant
+    ELC: [...mini([...elcBase, descendu]), ...mini([monte, elcBase[0]], { at: old })],
+  };
+  const svc = service([worldProvider(world)]);
+  await svc.ensureAll({ budgetMs: 1000, scope: "all" });
+  const teams = svc.allTeams();
+  const ids = teams.map((t) => t.id);
+  assert.equal(new Set(ids).size, ids.length, "aucun club en double");
+  assert.equal(teams.find((t) => t.id === "PL:descendu").leagueKey, "ELC");
+  assert.equal(teams.find((t) => t.id === "ELC:monte").leagueKey, "PL");
+  assert.equal(teams.length, 8);
+  assert.ok(teams.every((t) => t.rated));
+});
+
+test("annuaire : à dernier match égal, le championnat listé en premier garde le club", async () => {
+  const shared = club("same", "Club Commun");
+  const world = { PL: mini([club("PL:1", "Un"), club("PL:2", "Deux"), shared]), ELC: mini([club("ELC:1", "Trois"), club("ELC:2", "Quatre"), shared]) };
+  const teams = (await (async () => {
+    const svc = service([worldProvider(world)]);
+    await svc.ensureAll({ budgetMs: 1000, scope: "all" });
+    return svc.allTeams();
+  })());
+  assert.equal(teams.filter((t) => t.id === "same").length, 1);
+  assert.equal(teams.find((t) => t.id === "same").leagueKey, "PL");
+});
+
+test("annuaire : le club d'une coupe qui est aussi dans un championnat suivi n'est compté qu'une fois ; les autres forment le groupe « européen »", async () => {
+  const world = {
+    PL: mini([club("PL:ars", "Arsenal FC"), club("PL:che", "Chelsea FC"), club("PL:liv", "Liverpool FC")]),
+    UCL: mini([club("c-ars", "Arsenal"), club("c-che", "Chelsea FC"), club("c-sla", "Slavia Praha"), club("c-red", "Red Star Belgrade")]),
+  };
+  const svc = service([worldProvider(world)]);
+  await svc.ensureAll({ budgetMs: 1000, scope: "essential" });
+  const teams = svc.allTeams();
+  assert.equal(teams.length, 5, "3 clubs de championnat + 2 clubs de coupe seulement");
+  const lonely = teams.filter((t) => !t.rated);
+  assert.deepEqual(lonely.map((t) => t.name).sort(), ["Red Star Belgrade", "Slavia Praha"]);
+  assert.ok(lonely.every((t) => t.leagueKey === "EUR" && t.aliases.length === 0));
+  const alias = svc.teamAliasMap();
+  assert.equal(alias.get("c-ars"), "PL:ars");
+  assert.equal(alias.get("c-che"), "PL:che");
+  assert.equal(alias.has("c-sla"), false);
+  assert.equal(alias.size, 2);
+  // sans la coupe chargée, rien n'est ajouté
+  const noCup = service([worldProvider(world)]);
+  await noCup.ensureAll({ budgetMs: 1000 });
+  assert.equal(noCup.allTeams().length, 3);
+  assert.equal(noCup.teamAliasMap().size, 0);
+});
+
+test("annuaire : un nom de coupe qui conviendrait à deux clubs de championnat n'est rattaché à aucun des deux", async () => {
+  const world = {
+    PL: mini([club("PL:dyn", "Dynamo FC"), club("PL:two", "Deux"), club("PL:tre", "Trois")]),
+    SA: mini([club("SA:dyn", "Dynamo"), club("SA:qua", "Quatre"), club("SA:cin", "Cinq")]),
+    UCL: mini([club("c-dyn", "Dynamo"), club("c-x", "Autre Club"), club("PL:two", "Deux")]),
+  };
+  const svc = service([worldProvider(world)]);
+  await svc.ensureAll({ budgetMs: 1000, scope: "all" });
+  assert.equal(svc.teamAliasMap().has("c-dyn"), false, "ambigu : pas de rattachement au hasard");
+  const lonely = svc.allTeams().filter((t) => !t.rated).map((t) => t.name).sort();
+  assert.deepEqual(lonely, ["Autre Club", "Dynamo"]);
+  // un identifiant déjà connu comme club de championnat reste ce club, sans doublon
+  assert.equal(svc.allTeams().filter((t) => t.id === "PL:two").length, 1);
+});
+
+test("annuaire : mémorisé tant que les données ne changent pas, recalculé quand un championnat est rechargé", async () => {
+  const p = worldProvider({ PL: mini([club("a", "A"), club("b", "B")]), SA: mini([club("c", "C"), club("d", "D")]) });
+  const svc = service([p]);
+  await svc.ensureAll({ budgetMs: 1000 });
+  const first = svc.allTeams();
+  assert.equal(svc.allTeams(), first);
+  svc.setModelParams({ halfLifeDays: 77, priorMatches: 11 }); // invalide les championnats en mémoire
+  await svc.ensureAll({ budgetMs: 1000 });
+  const second = svc.allTeams();
+  assert.notEqual(second, first);
+  assert.equal(second.length, first.length);
+});
+
+test("allFailed ne tient compte que des championnats essentiels : les complémentaires peuvent manquer sans que le service soit « en panne »", async () => {
+  const handler = (down) => (l) => {
+    if (down.includes(l.key)) throw new Error("source en panne");
+    return { matches: mini([club(`${l.key}:1`, "Un"), club(`${l.key}:2`, "Deux"), club(`${l.key}:3`, "Trois")]), limited: false };
+  };
+  const keys = ["PL", "SA", "UCL", "ELC", "TSL"];
+  const extrasDown = service([fakeProvider("a", handler(["ELC", "TSL"]), { keys })]);
+  await extrasDown.ensureAll({ budgetMs: 1000, scope: "all" });
+  assert.equal(extrasDown.allFailed(), false);
+  assert.deepEqual(extrasDown.unloadedLeagues(), [
+    { key: "ELC", nom: "Championship", lot: "extra", etat: "echec" },
+    { key: "TSL", nom: "Süper Lig", lot: "extra", etat: "echec" },
+  ]);
+  const coreDown = service([fakeProvider("a", handler(["PL", "SA", "UCL"]), { keys })]);
+  await coreDown.ensureAll({ budgetMs: 1000, scope: "all" });
+  assert.equal(coreDown.allFailed(), true, "plus aucun championnat essentiel, même si des complémentaires sont chargés");
+  assert.deepEqual(coreDown.unloadedLeagues().map((l) => [l.key, l.lot]), [["PL", "core"], ["SA", "core"], ["UCL", "core"]]);
+});
+
+test("démarrage par étapes : l'essentiel (championnats principaux et coupes) est prêt avant les championnats complémentaires", async () => {
+  let release;
+  const gate = new Promise((resolve) => (release = resolve));
+  const world = { PL: mini([club("a", "A"), club("b", "B")]), UCL: mini([club("a", "A"), club("x", "X")]), ELC: mini([club("g", "G"), club("h", "H")]) };
+  const order = [];
+  const p = fakeProvider("fake", async (l, year) => {
+    if (l.tier === "extra") await gate; // les championnats complémentaires sont lents
+    order.push(l.key);
+    return { matches: year === 2026 ? world[l.key] : [], limited: false };
+  }, { keys: ["PL", "UCL", "ELC"] });
+  const quietLog = { log() {}, warn() {}, error() {} };
+  const svc = service([p], { log: quietLog });
+  const { ready, extras, timer } = svc.warmUp();
+  try {
+    const r = await ready;
+    assert.deepEqual(r.ready.map((d) => d.league.key).sort(), ["PL", "UCL"]);
+    assert.equal(svc.peekLeague("ELC"), null, "les championnats complémentaires ne sont pas encore là");
+    assert.equal(svc.allFailed(), false);
+    assert.deepEqual(svc.unloadedLeagues().map((l) => [l.key, l.etat]), [["ELC", "chargement"]]);
+    release();
+    const e = await extras;
+    assert.deepEqual(e.ready.map((d) => d.league.key), ["ELC"]);
+    assert.ok(svc.peekLeague("ELC"));
+    assert.deepEqual(svc.unloadedLeagues(), []);
+    assert.ok(order.indexOf("ELC") > order.indexOf("PL"));
+  } finally {
+    clearInterval(timer);
+    release();
+  }
+});
+
+test("démarrage : sans championnat complémentaire (interrupteur coupé), l'étape en arrière-plan est vide et ne gêne pas", async () => {
+  const p = worldProvider({ PL: mini([club("a", "A"), club("b", "B")]), ELC: mini([club("g", "G"), club("h", "H")]) });
+  const svc = service([p], { config: loadConfig({ FOOTBALL_DATA_API_KEY: "x", EXTRA_LEAGUES_ENABLED: "off" }), log: quiet });
+  const { ready, extras, timer } = svc.warmUp();
+  try {
+    assert.deepEqual((await ready).ready.map((d) => d.league.key), ["PL"]);
+    assert.equal(await extras, null);
+    assert.deepEqual(loadedKeys(p), ["PL"]);
+  } finally {
+    clearInterval(timer);
+  }
 });

@@ -14,6 +14,8 @@ Serveur Node.js (Express) de l'application **Analyseur Foot Pro**. Il calcule de
    viennent de la même matrice de scores : elles sont cohérentes entre elles (« plus de 2.5 » + « moins de 2.5 » = 100 %).
    Les totaux de buts sont corrigés à la source (rythme des équipes et niveau de buts, voir « Correction des totaux de buts »),
    donc tous les paris restent cohérents entre eux.
+   Deux clubs de **championnats différents** (Ligue des champions, match amical entre clubs…) se comparent grâce aux matchs de
+   coupes d'Europe : voir « Tous les matchs : coupes d'Europe, autres championnats, clubs de championnats différents ».
 3. **IA (Claude Sonnet 5.5)** : elle reçoit les chiffres du modèle, la forme, les bilans domicile/extérieur et les
    confrontations directes. Elle rédige la justification, indique son niveau de confiance et peut corriger la
    probabilité **de 4 points au maximum** si elle connaît un facteur concret. Si l'IA est indisponible, le résultat
@@ -31,17 +33,18 @@ Serveur Node.js (Express) de l'application **Analyseur Foot Pro**. Il calcule de
 | Route | Rôle |
 |---|---|
 | `GET /health` | Sonde de santé (pour Render). |
-| `GET /api/status` | État des sources de données, de l'IA, des réglages du modèle (dont la correction des totaux de buts, `modele.correctionDesButs`) et alertes éventuelles. |
-| `GET /api/leagues` | Championnats suivis. |
-| `GET /api/teams` | Liste des clubs des championnats chargés, avec leurs écritures courantes (« PSG », « Man City »…) : sert aux suggestions de saisie du site. `complet: false` tant qu'un championnat n'est pas chargé. Mise en cache 5 minutes par le navigateur. |
-| `POST /api/analyze` | Analyse d'une sélection `{ equipe1, equipe2, typePari }` ou de plusieurs `{ legs: [...] }` (12 maximum). Avec `"ia": false` dans le corps, réponse **rapide du seul modèle statistique** (aucun appel à l'IA, quota IA intact, `ia.statut: "non_demandee"`) : le site peut l'afficher tout de suite, puis relancer la demande avec l'IA. |
-| `GET /api/top-matches` | Les 3 meilleurs paris (3 matchs différents) des prochaines 72 h (jusqu'à 7 jours si besoin). |
-| `POST /api/auto-coupon` | `{ matches: [{ equipe1, equipe2 }] }` : meilleur pari par match. |
-| `GET /api/backtest?jours=120&championnat=PL` | Rapport de fiabilité sur les matchs récents (voir « Contrôle de fiabilité » plus bas). |
+| `GET /api/status` | État des sources de données, de l'IA, des réglages du modèle (dont la correction des totaux de buts, `modele.correctionDesButs`), de la comparaison entre championnats (`europe` : niveau de chaque championnat mesuré grâce aux coupes d'Europe) et alertes éventuelles (`avertissements` = l'essentiel ; `remarques` = championnats complémentaires). |
+| `GET /api/leagues` | Compétitions suivies, avec leur `type` (`championnat` ou `coupe`) et leur `niveau` (`principal` ou `complementaire`). |
+| `GET /api/teams` | Liste des clubs des compétitions chargées, avec leurs écritures courantes (« PSG », « Man City »…) : sert aux suggestions de saisie du site. Les clubs connus **seulement** par une coupe d'Europe (aucun championnat suivi) ont `championnat: "EUR"`. `complet: false` tant qu'un championnat principal ou une coupe n'est pas chargé, ou qu'un complémentaire est encore en cours de chargement. Mise en cache 5 minutes par le navigateur. |
+| `POST /api/analyze` | Analyse d'une sélection `{ equipe1, equipe2, typePari }` ou de plusieurs `{ legs: [...] }` (12 maximum). **N'importe quels deux clubs connus** : même championnat, championnats différents (la réponse porte alors `comparaisonEntreChampionnats`), coupes d'Europe. Avec `"ia": false` dans le corps, réponse **rapide du seul modèle statistique** (aucun appel à l'IA, quota IA intact, `ia.statut: "non_demandee"`) : le site peut l'afficher tout de suite, puis relancer la demande avec l'IA. |
+| `GET /api/top-matches` | Les 3 meilleurs paris (3 matchs différents) des prochaines 72 h (jusqu'à 7 jours si besoin), dans les 10 championnats principaux et les coupes d'Europe (`donnees.coupesPretes`). |
+| `POST /api/auto-coupon` | `{ matches: [{ equipe1, equipe2 }] }` : meilleur pari par match, pour n'importe quels clubs connus. |
+| `GET /api/backtest?jours=120&championnat=PL` | Rapport de fiabilité sur les matchs récents des 10 championnats principaux, ou d'un championnat précis (complémentaires compris ; pas les coupes). Voir « Contrôle de fiabilité » plus bas. |
 | `/api/analyze-simple` | **Supprimée** (410) : elle permettait à n'importe qui d'utiliser votre clé Anthropic. |
 
 Si une équipe ou un type de pari n'est pas reconnu, la réponse contient `probabilite: null`, un `etat`
-(`equipe_inconnue`, `ambigu`, `ligues_differentes`, `marche_inconnu`…) et un `message` : aucune probabilité n'est inventée.
+(`equipe_inconnue`, `ambigu`, `marche_inconnu`, `chargement`…) et un `message` : aucune probabilité n'est inventée. (`ligues_differentes`
+n'apparaît plus que si `EUROPE_ENABLED=off`.)
 
 ### Reconnaissance des noms d'équipes
 
@@ -81,9 +84,54 @@ TheSportsDB, aux **noms alternatifs de chaque club** (lus automatiquement, un ap
 | `MODEL_HALF_LIFE_DAYS` / `MODEL_PRIOR_MATCHES` | Réglages de départ du modèle (affinés ensuite automatiquement). | `300` / `10` |
 | `MODEL_CALIBRATION` | **Interrupteur de sécurité** : `off` coupe la correction des totaux de buts (rythme des équipes et niveau de buts, voir plus bas) et redonne le modèle d'avant. À poser dans Render → Environment ; le service redémarre. | actif |
 | `MODEL_RHYTHM_EXPONENT` | Intensité de la correction du rythme des équipes, de 0,2 (très forte) à 1 (aucune correction du rythme ; le niveau de buts reste ajusté chaque jour). | `0.5` |
+| `EUROPE_ENABLED` | **Interrupteur de sécurité** : `off` coupe les coupes d'Europe et la comparaison entre championnats (retour au fonctionnement d'avant : deux clubs de championnats différents donnent `ligues_differentes`). | actif |
+| `EXTRA_LEAGUES_ENABLED` | `off` ne charge que les 10 championnats principaux (pas les 20 championnats complémentaires). | actif |
+| `TOP_CUPS` | `off` : « Top Matchs » ne retient pas de match de coupe d'Europe (les analyses de « Mon coupon » et « Auto » restent possibles). | actif |
+| `EUROPE_HALF_LIFE_DAYS` | Mémoire des matchs de coupe pour situer les championnats entre eux (60 à 1500 jours). | `365` |
 | `SPORTSDB_MIN_INTERVAL_MS` | Écart minimal entre deux appels à TheSportsDB. **Ne le baissez pas si la même clé sert à une autre application** : les limites (30 appels/min en gratuit, 100 en Premium) sont communes à toutes les applications qui utilisent la clé. Si le service répond « trop de requêtes » (429), le serveur le laisse tranquille pendant environ une minute au lieu d'insister. | `2100` |
 | `FOOTBALL_DATA_MIN_INTERVAL_MS` | Écart minimal entre deux appels à football-data.org (10 appels/min en gratuit). | `6500` |
 | `PORT` | Port d'écoute (fourni par Render). | `3001` |
+
+## Tous les matchs : coupes d'Europe, autres championnats, clubs de championnats différents
+
+Les modèles d'équipes (attaque, défense) se calculent **à l'intérieur d'un championnat** : une équipe « deux fois meilleure que la
+moyenne » en Écosse n'est pas deux fois meilleure que la moyenne en Angleterre. Pour analyser un match entre deux championnats
+(Ligue des champions, Ligue Europa, Ligue Conférence, ou n'importe quelle paire de clubs saisie à la main), le serveur a besoin d'un
+pont : les **matchs de coupes d'Europe**, où des clubs de championnats différents se rencontrent. Il les charge avec les championnats.
+
+- **Modèle** (`src/cross.js`) : les buts attendus d'un match se calculent à partir de la force de chaque club dans son championnat
+  (inchangée), corrigée de l'écart de niveau entre les deux championnats et d'un petit écart propre à chaque club mesuré en coupe.
+  Le niveau de chaque championnat part d'une valeur de départ (`strength` dans `src/leagues.js`, environ 0,23 pour 100 points Elo) puis
+  est déplacé par les résultats réels, dans la mesure où les matchs de coupe sont nombreux (mémoire d'un an, `EUROPE_HALF_LIFE_DAYS`).
+  Le calcul est refait à chaque actualisation des données (quelques dizaines de millisecondes).
+- **Prudence** : l'écart de niveau reste incertain. Au lieu d'une seule valeur, la prévision mélange cinq valeurs possibles pondérées
+  selon l'incertitude : les probabilités sont **moins tranchées** que dans un même championnat, sans changer le nombre de buts attendu.
+  La confiance n'est jamais « élevée » entre championnats ; elle est « faible » quand le niveau relatif des deux championnats n'est pas
+  mesuré par assez de matchs de coupe (moins de 10 matchs pondérés) ou quand un club est peu connu. La réponse porte
+  `comparaisonEntreChampionnats` (`championnat1`, `championnat2`, `niveauDesChampionnatsMesure`, `message`) et l'IA est prévenue.
+- **Clubs connus seulement par une coupe** (un club chypriote ou kazakh, par exemple) : ils forment le groupe « Autres clubs
+  européens » (`EUR`). Faute de championnat suivi, leur force est neutre et seul leur niveau se déduit de leurs matchs de coupe, avec un
+  a priori plus bas et plus incertain. Un club présent dans un championnat suivi et dans une coupe sous deux identifiants n'est compté
+  qu'une fois (rapprochement par le nom, uniquement quand un seul club correspond).
+- **Mon coupon / Auto** : n'importe quels deux clubs connus. Le nom de la compétition est celui de la coupe quand un match est
+  programmé entre eux (« Ligue des champions », avec sa date), sinon « Match entre clubs de championnats différents » (ou « Match entre
+  clubs européens »).
+- **Top Matchs** : les matchs de coupe à venir sont candidats (sauf `TOP_CUPS=off`), mais seulement avec une qualité de données au moins
+  « moyenne » : les deux championnats mesurés et chaque club bien connu. Les championnats complémentaires ne sont jamais retenus.
+- **Championnats complémentaires** : 20 championnats de plus (2es divisions anglaise, allemande, espagnole, italienne, française, Turquie,
+  Grèce, Autriche, Suisse, Danemark, Norvège, Suède, Pologne, Ukraine, Croatie, Serbie, Israël, Russie, Arabie saoudite, Argentine). Ils se
+  chargent **après** l'essentiel, en arrière-plan : une demande n'attend jamais pour eux (un club pas encore connu donne alors
+  `etat: "chargement"`). Leurs problèmes vont dans `remarques` et ne déclenchent jamais d'alerte. Ils servent aux matchs saisis à la
+  main, pas à « Top Matchs » (moins de recul sur la qualité de leurs données).
+- **Où le voir** : `/api/status` → `europe` : coupes chargées, matchs de coupe utilisés, et pour chaque championnat son niveau a priori,
+  son niveau estimé, le nombre de matchs de coupe qui le mesurent et s'il est `mesure`.
+- **Revenir en arrière** : `EUROPE_ENABLED=off` (coupes et comparaison), `EXTRA_LEAGUES_ENABLED=off` (championnats complémentaires) ou
+  `TOP_CUPS=off` dans Render → Environment ; le service redémarre.
+
+**Ce qu'il faut savoir** : cette comparaison est une estimation. Elle ne connaît ni les effectifs, ni la motivation, ni l'enjeu d'un
+match de coupe ; les niveaux de départ des championnats sont des valeurs fixes, corrigées seulement par les matchs de coupe disponibles.
+Un championnat dont les clubs jouent peu en coupe (ou pas du tout) garde son niveau de départ, ce qui est signalé
+(`niveauDesChampionnatsMesure: false`, confiance « faible »). Les sélections nationales et les championnats absents de la liste ne sont pas couverts.
 
 ## Correction des totaux de buts
 
@@ -143,10 +191,11 @@ La réponse reprend les réglages essayés (`essai`) et ceux du serveur (`reglag
 
 ## Surveillance
 
-`scripts/controle-sante.js` contrôle l'API en production : serveur joignable, tous les championnats chargés et rafraîchis
-depuis moins de 3 h, aucun avertissement dans `/api/status`, IA ni en pause ni bloquée (clé refusée, crédit épuisé, modèle
-introuvable), budget quotidien d'appels non épuisé, et une vraie analyse d'essai (deux clubs, pari « Score exact » : sans
-IA, donc gratuite). Le premier essai raté est suivi de deux autres, à une minute d'écart, pour ne pas donner l'alerte lors
+`scripts/controle-sante.js` contrôle l'API en production : serveur joignable, tous les championnats principaux et les coupes
+chargés et rafraîchis depuis moins de 3 h, aucun avertissement dans `/api/status`, IA ni en pause ni bloquée (clé refusée,
+crédit épuisé, modèle introuvable), budget quotidien d'appels non épuisé, et de vraies analyses d'essai (deux clubs d'un même
+championnat, puis deux clubs de championnats différents quand la comparaison est active ; pari « Score exact » : sans IA, donc
+gratuites). Les championnats complémentaires ne donnent jamais d'alerte : leurs problèmes sont seulement signalés en remarque. Le premier essai raté est suivi de deux autres, à une minute d'écart, pour ne pas donner l'alerte lors
 d'un simple redémarrage.
 
 ```bash
@@ -165,23 +214,28 @@ complément pour être prévenu en quelques minutes d'une panne complète.
 npm ci
 cp .env.example .env     # puis renseignez les clés
 npm start                # http://localhost:3001/api/status
-npm test                 # 200+ tests automatiques (sans réseau)
+npm test                 # 360+ tests automatiques (sans réseau)
 npm run e2e              # démarre le vrai serveur avec de faux services et vérifie les routes
 ```
 
-Au démarrage, le chargement des 8 championnats de football-data.org prend environ **deux minutes**
-(limite de 10 appels par minute de l'offre gratuite). Pendant ce temps, `/api/status` indique l'avancement
-et les routes répondent avec les championnats déjà prêts.
+Au démarrage, le chargement des 8 championnats de football-data.org, de la Ligue des champions et du Championship prend
+environ **deux minutes** (limite de 10 appels par minute de l'offre gratuite). Avec TheSportsDB (clé payante), l'essentiel
+(10 championnats principaux + 3 coupes d'Europe) est prêt en environ une minute, puis les 20 championnats complémentaires se
+chargent en arrière-plan (une à deux minutes de plus). Pendant ce temps, `/api/status` indique l'avancement et les routes
+répondent avec les championnats déjà prêts.
 
 ## Couverture des championnats
 
 football-data.org (offre gratuite) : Premier League, Liga, Serie A, Bundesliga, Ligue 1, Primeira Liga,
-Eredivisie, Brasileirão. L'Écosse et la Belgique ne sont pas incluses dans cette offre : elles ne sont
-analysées que si une clé TheSportsDB payante est fournie (`SPORTSDB_API_KEY`).
+Eredivisie, Brasileirão, plus la Ligue des champions et le Championship. L'Écosse, la Belgique, la Ligue Europa, la Ligue
+Conférence et les autres championnats complémentaires ne sont pas inclus dans cette offre : ils ne sont analysés que si une clé
+TheSportsDB payante est fournie (`SPORTSDB_API_KEY`), qui couvre les 33 compétitions de `src/leagues.js`.
 
-Sans clé football-data.org, le serveur peut fonctionner avec **TheSportsDB seul** (10 championnats), à condition que
-la clé soit payante : le chargement des 10 championnats prend alors environ 45 secondes au démarrage (2 saisons × 10
-championnats, un appel toutes les 2 secondes). La liste des clubs de chaque championnat (noms alternatifs) est lue
+Sans clé football-data.org, le serveur peut fonctionner avec **TheSportsDB seul** (33 compétitions), à condition que
+la clé soit payante : le chargement des 10 championnats principaux prend alors environ 45 secondes au démarrage (2 saisons × 10
+championnats, un appel toutes les 2 secondes), les coupes d'Europe environ 15 secondes de plus. Ensuite, le rafraîchissement
+toutes les 25 minutes demande environ 33 appels (la saison précédente et les noms de clubs ne sont redemandés qu'une fois par
+jour) : au rythme réglé par `SPORTSDB_MIN_INTERVAL_MS`, loin du plafond de la clé, même partagée. La liste des clubs de chaque championnat (noms alternatifs) est lue
 ensuite, sans retarder les matchs, et gardée 24 h. Avec une clé gratuite, aucun championnat ne se charge ; `/api/status`
 l'indique (voir ci-dessous) et les analyses répondent « données indisponibles ».
 
@@ -189,6 +243,9 @@ l'indique (voir ci-dessous) et les analyses répondent « données indisponibles
 
 - Aucune information sur les blessures, suspensions, compositions ou le contexte du jour : les probabilités
   reposent sur les résultats passés. L'IA ne peut pas non plus les connaître en temps réel.
+- Entre deux championnats, l'estimation repose sur les matchs de coupes d'Europe et sur des niveaux de départ fixes par championnat :
+  elle est signalée comme moins précise et la confiance n'y est jamais « élevée ». Les sélections nationales, les coupes nationales
+  et les championnats absents de `src/leagues.js` ne sont pas couverts.
 - Les sélections de plusieurs matchs sont multipliées comme si les matchs étaient indépendants.
 - Un modèle statistique ne « prédit » pas : il estime des fréquences. Aucun pari n'est sûr.
 
@@ -199,7 +256,9 @@ sa source, l'âge des données et la dernière erreur (pour un championnat en é
 « TheSportsDB : données incomplètes (15 matchs reçus : clé gratuite ?) »), ainsi que l'état de l'IA (dernier succès,
 dernière erreur, appels du jour). La liste `avertissements` est **vide seulement quand tout est chargé et à jour** :
 elle signale aussi les championnats encore en chargement, ceux qui ont échoué (avec la raison) et ceux dont la dernière
-actualisation a échoué.
+actualisation a échoué. Les mêmes problèmes sur un championnat **complémentaire** vont dans `remarques` (sans gravité : ces
+championnats se chargent en dernier). `europe` (dans `/api/status`) montre si les coupes d'Europe sont chargées : sans elles, les
+niveaux des championnats restent à leur valeur de départ et les matchs entre championnats ont une confiance « faible ».
 Pour chaque championnat, `equipes` donne le nombre de clubs connus et `equipesAvecNomsAlternatifs` le nombre de clubs
 dont TheSportsDB a fourni des noms alternatifs. Un `0` partout signifie seulement que cette liste n'a pas été reçue
 (l'analyse fonctionne, avec les écritures de la liste `src/team-groups.js`) ; elle est redemandée au bout d'une heure.

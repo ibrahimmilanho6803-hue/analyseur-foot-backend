@@ -67,8 +67,23 @@ function evaluateAll(matrix) {
   return MARKETS.map((m) => ({ label: m.label, p: evaluate(matrix, m).p }));
 }
 
+// Lecture d'une matrice de scores : probabilité de chaque pari, résultats principaux et score le plus probable.
+function describeMatrix(matrix) {
+  const probs = evaluateAll(matrix);
+  const get = (label) => (probs.find((x) => x.label === label) || { p: 0 }).p;
+  const outcomes = {
+    home: get("Victoire domicile"),
+    draw: get("Match nul"),
+    away: get("Victoire extérieur"),
+    over25: get("Plus de 2.5 buts"),
+    btts: get("Les deux équipes marquent"),
+  };
+  const exact = evaluate(matrix, resolveMarket("Score exact"));
+  return { probs, outcomes, likelyScore: exact.detail, likelyScoreP: exact.p };
+}
+
 // Probabilités « moyennes » d'un match de championnat, utilisées quand on ne connaît pas les équipes.
 const GENERIC = scoreMatrix(1.5, 1.15);
 const baseRate = (market) => evaluate(GENERIC, market).p;
 
-module.exports = { MARKETS, resolveMarket, evaluate, evaluateAll, baseRate };
+module.exports = { MARKETS, resolveMarket, evaluate, evaluateAll, describeMatrix, baseRate };

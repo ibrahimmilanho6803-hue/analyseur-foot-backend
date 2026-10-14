@@ -100,12 +100,14 @@ test("nom ambigu : l'utilisateur est invité à préciser", async () => {
   assert.ok(r.suggestions.equipe1.length >= 2);
 });
 
-test("équipes de deux championnats différents : refus explicite", async () => {
-  const w = buildWorld();
+test("comparaison entre championnats coupée (EUROPE_ENABLED=off) : deux clubs de championnats différents sont refusés, comme avant", async () => {
+  const w = buildWorld({ env: { EUROPE_ENABLED: "off" } });
   const [r] = await w.analysis.analyzeLegs([leg("Arsenal", "Juventus", "Match nul")]);
   assert.equal(r.etat, "ligues_differentes");
   assert.equal(r.probabilite, null);
   assert.equal(r.equipe1, "Arsenal FC");
+  const auto = await w.coupons.autoCoupon([{ equipe1: "Arsenal", equipe2: "Juventus" }]);
+  assert.equal(auto.resultats[0].etat, "ligues_differentes");
 });
 
 test("même équipe des deux côtés : refus", async () => {
@@ -172,13 +174,21 @@ test("démarrage : tant que des championnats ne sont pas chargés, un club intro
   await w.data.getLeagueData("PL"); // seul le championnat anglais est prêt
   assert.equal(w.analysis.resolveTeams("Arsenal", "Chelsea").state, "ok");
   assert.equal(w.analysis.resolveTeams("Real Madrid", "Barcelona").state, "chargement");
-  // Un club trouvé limite la recherche de l'autre à son championnat, déjà chargé : la réponse est définitive.
-  assert.equal(w.analysis.resolveTeams("Arsenal", "Nulle part").state, "equipe_inconnue");
+  // Le second club peut jouer dans n'importe quel championnat (comparaison entre championnats) : tant que certains ne sont pas chargés,
+  // un club introuvable donne « chargement », même si l'autre est trouvé.
+  assert.equal(w.analysis.resolveTeams("Arsenal", "Nulle part").state, "chargement");
   assert.deepEqual(w.data.unloadedLeagues().map((l) => [l.key, l.etat]), [["PD", "chargement"], ["SA", "chargement"]]);
   await w.data.ensureAll();
   assert.equal(w.analysis.resolveTeams("Real Madrid", "Barcelona").state, "ok");
   assert.equal(w.analysis.resolveTeams("Nulle part", "Ailleurs").state, "equipe_inconnue");
   assert.deepEqual(w.data.unloadedLeagues(), []);
+});
+
+test("sans comparaison entre championnats, un club trouvé limite la recherche de l'autre à son championnat : la réponse est définitive", async () => {
+  const w = buildWorld({ aiBehaviour: "off", env: { EUROPE_ENABLED: "off" } });
+  await w.data.getLeagueData("PL");
+  assert.equal(w.analysis.resolveTeams("Arsenal", "Nulle part").state, "equipe_inconnue");
+  assert.equal(w.analysis.resolveTeams("Real Madrid", "Barcelona").state, "chargement");
 });
 
 test("championnat en panne : le message le dit, car le club cherché est peut-être dedans (analyse et coupon automatique)", async () => {
@@ -189,11 +199,16 @@ test("championnat en panne : le message le dit, car le club cherché est peut-ê
   const auto = await w.coupons.autoCoupon([{ equipe1: "Real Madrid", equipe2: "Barcelona" }]);
   assert.equal(auto.resultats[0].etat, "equipe_inconnue");
   assert.match(auto.resultats[0].message, /indisponibles pour : Liga/);
-  // Un club trouvé limite la recherche de l'autre à son championnat : inutile d'évoquer les pannes.
+  // Le second club peut jouer dans le championnat en panne (comparaison entre championnats) : on le dit aussi.
   const [ok] = await w.analysis.analyzeLegs([leg("Arsenal", "Nulle part", "Match nul")]);
   assert.equal(ok.etat, "equipe_inconnue");
-  assert.doesNotMatch(ok.message, /indisponibles pour/);
+  assert.match(ok.message, /indisponibles pour : Liga/);
   assert.deepEqual(w.data.unloadedLeagues().map((l) => [l.key, l.etat]), [["PD", "echec"]]);
+  // Sans comparaison entre championnats, un club trouvé limite la recherche à son championnat : inutile d'évoquer les pannes.
+  const old = buildWorld({ aiBehaviour: "off", failing: ["PD"], env: { EUROPE_ENABLED: "off" } });
+  const [legacy] = await old.analysis.analyzeLegs([leg("Arsenal", "Nulle part", "Match nul")]);
+  assert.equal(legacy.etat, "equipe_inconnue");
+  assert.doesNotMatch(legacy.message, /indisponibles pour/);
 });
 
 test("si toutes les sources ont échoué, le message le dit au lieu de promettre « réessayez dans une minute »", async () => {

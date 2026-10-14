@@ -4,17 +4,21 @@ const { round } = require("./util");
 const { thinLegs, selectCoupon, bestForFixture } = require("./picks");
 const { matchStats } = require("./stats");
 const { WARNING_ODDS } = require("./analysis");
+const { isCup } = require("./leagues");
 
 const TOP_TTL_MS = 15 * 60000;
 const PARTIAL_TTL_MS = 60000;
 const SAFETY = 1.02; // marge sur l'objectif de cote, pour absorber la petite correction de l'IA
 
-function createCoupons({ config, data, analysis, now = Date.now, log = console }) {
+// `europe` (facultatif) : matchs de coupes d'Europe et comparaison entre championnats (europe.js). « Top Matchs » ne retient des matchs
+// de coupe que si TOP_CUPS n'est pas coupé ; le mode Auto peut analyser n'importe quel match qu'on lui donne.
+function createCoupons({ config, data, analysis, europe = null, now = Date.now, log = console }) {
   const top = config.top;
+  const cupsInTop = Boolean(europe && europe.enabled && config.europe && config.europe.topCups);
   const { computeCore, reviewWithAi, aiPublic, finalProbability, confidence, modelJustification } = analysis;
-  const { pct1, unresolved, unresolvedFrom } = analysis.helpers;
+  const { pct1, unresolved, unresolvedFrom, crossPublic } = analysis.helpers;
 
-  // Matchs à venir de tous les championnats prêts, avec leurs paris candidats.
+  // Matchs à venir de tous les championnats prêts (et des coupes d'Europe), avec leurs paris candidats.
   function gather(ready, nowMs, hours, minLevel, shift) {
     const until = nowMs + hours * 3600000;
     const out = [];
@@ -27,6 +31,31 @@ function createCoupons({ config, data, analysis, now = Date.now, log = console }
         const legs = thinLegs(calibrated, { minP: top.minLegP, maxP: top.maxLegP });
         if (!legs.length) continue;
         out.push({ id: f.id, leagueKey: ld.league.key, kickoff: f.kickoff, quality: core.quality.level, legs, fixture: f, leagueData: ld, core });
+      }
+    }
+    // Matchs de coupes d'Europe : les deux clubs viennent de championnats différents, l'estimation est donc moins précise. Pour ne
+    // pas laisser le « meilleur des meilleurs » choisir justement les écarts de niveau mal mesurés, on exige des données au moins
+    // « moyennes » (les deux championnats mesurés par des matchs de coupe, chaque club bien connu), quel que soit minLevel.
+    if (cupsInTop) {
+      for (const f of europe.upcomingCupFixtures(nowMs, until)) {
+        const home = europe.teamRecord(f.home.id);
+        const away = europe.teamRecord(f.away.id);
+        if (!home || !away) continue;
+        const core = europe.core(home, away);
+        if (!core || core.quality.level < Math.max(1, minLevel)) continue;
+        const calibrated = core.probs.map((x) => ({ label: x.label, p: Math.max(0.01, x.p + shift) }));
+        const legs = thinLegs(calibrated, { minP: top.minLegP, maxP: top.maxLegP });
+        if (!legs.length) continue;
+        out.push({
+          id: f.id,
+          leagueKey: f.cup.key,
+          kickoff: f.kickoff,
+          quality: core.quality.level,
+          legs,
+          fixture: f,
+          leagueData: { league: f.cup, finished: europe.relevantFinished(home, away), fixtures: [] },
+          core,
+        });
       }
     }
     return out;
@@ -57,11 +86,16 @@ function createCoupons({ config, data, analysis, now = Date.now, log = console }
       homeAway2: stats.homeAway2,
       h2h: stats.h2h,
       ia: aiPublic(res),
+      ...(c.core.cross ? { comparaisonEntreChampionnats: crossPublic(c.core.cross) } : {}),
     };
   }
 
   async function computeTop() {
-    const { ready, pending, failed } = await data.ensureAll({ budgetMs: top.budgetMs });
+    // Championnats principaux et coupes d'Europe : les championnats complémentaires ne servent pas à choisir le « Top Matchs ».
+    const loaded = await data.ensureAll({ budgetMs: top.budgetMs, scope: "essential" });
+    const { pending, failed } = loaded;
+    const ready = loaded.ready.filter((d) => !isCup(d.league));
+    const cupsReady = loaded.ready.filter((d) => isCup(d.league));
     if (!ready.length) {
       const err = new Error("Aucune source de données n'est disponible pour le moment.");
       err.code = "NO_DATA";
@@ -86,6 +120,7 @@ function createCoupons({ config, data, analysis, now = Date.now, log = console }
       complet: pending.length === 0,
       donnees: {
         championnatsPrets: ready.map((d) => d.league.key),
+        coupesPretes: cupsInTop ? cupsReady.map((d) => d.league.key) : [],
         enAttente: pending,
         enEchec: failed,
         sources: [...new Set(ready.map((d) => d.provider))],
@@ -113,6 +148,7 @@ function createCoupons({ config, data, analysis, now = Date.now, log = console }
           outcomes: c.core.outcomes,
           quality: c.core.quality,
           stats,
+          ...(c.core.cross ? { cross: c.core.cross } : {}),
         };
         const res = await reviewWithAi(ctx, { key: `top:${f.id}:${leg.label}:${Math.round(leg.p * 100)}`, timeoutMs: 20000 });
         const review = res.review || null;
@@ -177,8 +213,7 @@ function createCoupons({ config, data, analysis, now = Date.now, log = console }
         try {
           const r = analysis.resolveTeams(m.equipe1, m.equipe2);
           if (r.state !== "ok") return { index, ...unresolvedFrom(r) };
-          const ld = await data.getLeagueData(r.leagueKey);
-          const core = computeCore(ld, r.home.id, r.away.id);
+          const { core } = await analysis.prepare(r);
           const shift = analysis.calibration.pickShift;
           const pick = bestForFixture(core.probs.map((x) => ({ label: x.label, p: Math.max(0.01, x.p + shift) })), { minP: top.minLegP, maxP: top.maxLegP });
           if (!pick) return { index, ...unresolved("marche_inconnu", { message: "Aucun pari exploitable pour ce match." }) };

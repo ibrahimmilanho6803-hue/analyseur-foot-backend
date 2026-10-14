@@ -72,6 +72,18 @@ function loadConfig(env = process.env) {
       calibration: !isOff(env.MODEL_CALIBRATION),
       rhythmExponent: clamp(num(env.MODEL_RHYTHM_EXPONENT, 0.5), 0.2, 1),
     },
+    // Ouverture à tous les matchs : coupes d'Europe (Ligue des champions, Ligue Europa, Ligue Conférence), comparaison entre clubs de
+    // championnats différents et championnats complémentaires. Chaque interrupteur se coupe sans redéployer le code :
+    //  - EUROPE_ENABLED=off : retour au fonctionnement d'avant (seuls les clubs d'un même championnat se comparent, pas de coupes) ;
+    //  - EXTRA_LEAGUES_ENABLED=off : seuls les 10 championnats principaux sont chargés ;
+    //  - TOP_CUPS=off : « Top Matchs » ne retient pas de matchs de coupes d'Europe.
+    europe: {
+      enabled: !isOff(env.EUROPE_ENABLED),
+      extraLeagues: !isOff(env.EXTRA_LEAGUES_ENABLED),
+      topCups: !isOff(env.TOP_CUPS),
+      // Mémoire des résultats de coupes d'Europe pour comparer les championnats (le niveau d'un championnat varie lentement).
+      halfLifeDays: clamp(num(env.EUROPE_HALF_LIFE_DAYS, 365), 60, 1500),
+    },
     cache: {
       seasonTtlMs: num(env.CACHE_SEASON_TTL_MIN, 20) * 60000,
       previousSeasonTtlMs: 24 * 3600000,
