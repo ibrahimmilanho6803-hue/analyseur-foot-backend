@@ -45,62 +45,62 @@
 [+   2s]    clubs « Autres clubs européens » (160) : AEK Larnaca, Aktobe, Alashkert, Aluminij, Apollon Limassol, Ararat-Armenia, Araz-Naxçıvan, Arda Kardzhali, Aris Limassol, Astana, Atert Bissen, Atlètic d'Escaldes
 [+   2s]    noms de clubs en double : aucun
 [+   2s] === Analyses (sans IA) ===
-[+   2s]    même championnat (référence) | Arsenal – Chelsea | Victoire domicile → HTTP 200 ; etat=ok ; proba=65.8 ; confiance=moyen ; buts attendus={"equipe1":2.21,"equipe2":0.92} ; 412 ms
-[+   2s]    même championnat (référence) | Arsenal – Chelsea | Plus de 2.5 buts → HTTP 200 ; etat=ok ; proba=60.5 ; confiance=moyen ; buts attendus={"equipe1":2.21,"equipe2":0.92} ; 175 ms
-[+   2s]    Ligue des champions : Premier League – Liga | Arsenal – Real Madrid | Victoire domicile → HTTP 200 ; etat=ok ; proba=59.5 ; confiance=moyen ; buts attendus={"equipe1":1.86,"equipe2":0.85} ; 225 ms
+[+   2s]    même championnat (référence) | Arsenal – Chelsea | Victoire domicile → HTTP 200 ; etat=ok ; proba=65.8 ; confiance=moyen ; buts attendus={"equipe1":2.21,"equipe2":0.92} ; 363 ms
+[+   2s]    même championnat (référence) | Arsenal – Chelsea | Plus de 2.5 buts → HTTP 200 ; etat=ok ; proba=60.5 ; confiance=moyen ; buts attendus={"equipe1":2.21,"equipe2":0.92} ; 183 ms
+[+   2s]    Ligue des champions : Premier League – Liga | Arsenal – Real Madrid | Victoire domicile → HTTP 200 ; etat=ok ; proba=59.5 ; confiance=moyen ; buts attendus={"equipe1":1.86,"equipe2":0.85} ; 221 ms
 [+   2s]       comparaison : {"championnat1":"Premier League","championnat2":"Liga","niveauDesChampionnatsMesure":true,"message":"Ces deux clubs ne jouent pas dans le même championnat : leur niveau relatif est estimé grâce aux matchs de coupes d'Europe. Estimation moins précise qu'entre deux clubs d'un même championnat."}
-[+   3s]    Ligue des champions : Premier League – Liga | Arsenal – Real Madrid | Plus de 2.5 buts → HTTP 200 ; etat=ok ; proba=50.6 ; confiance=moyen ; buts attendus={"equipe1":1.86,"equipe2":0.85} ; 180 ms
+[+   3s]    Ligue des champions : Premier League – Liga | Arsenal – Real Madrid | Plus de 2.5 buts → HTTP 200 ; etat=ok ; proba=50.6 ; confiance=moyen ; buts attendus={"equipe1":1.86,"equipe2":0.85} ; 171 ms
 [+   3s]       comparaison : {"championnat1":"Premier League","championnat2":"Liga","niveauDesChampionnatsMesure":true,"message":"Ces deux clubs ne jouent pas dans le même championnat : leur niveau relatif est estimé grâce aux matchs de coupes d'Europe. Estimation moins précise qu'entre deux clubs d'un même championnat."}
-[+   3s]    Ligue des champions : Ligue 1 – Bundesliga | PSG – Bayern | Victoire domicile → HTTP 200 ; etat=ok ; proba=39.4 ; confiance=moyen ; buts attendus={"equipe1":1.52,"equipe2":1.42} ; 175 ms
+[+   3s]    Ligue des champions : Ligue 1 – Bundesliga | PSG – Bayern | Victoire domicile → HTTP 200 ; etat=ok ; proba=39.4 ; confiance=moyen ; buts attendus={"equipe1":1.52,"equipe2":1.42} ; 168 ms
 [+   3s]       comparaison : {"championnat1":"Ligue 1","championnat2":"Bundesliga","niveauDesChampionnatsMesure":true,"message":"Ces deux clubs ne jouent pas dans le même championnat : leur niveau relatif est estimé grâce aux matchs de coupes d'Europe. Estimation moins précise qu'entre deux clubs d'un même championnat."}
-[+   3s]    Ligue des champions : Ligue 1 – Bundesliga | PSG – Bayern | Plus de 2.5 buts → HTTP 200 ; etat=ok ; proba=56.3 ; confiance=moyen ; buts attendus={"equipe1":1.52,"equipe2":1.42} ; 172 ms
+[+   3s]    Ligue des champions : Ligue 1 – Bundesliga | PSG – Bayern | Plus de 2.5 buts → HTTP 200 ; etat=ok ; proba=56.3 ; confiance=moyen ; buts attendus={"equipe1":1.52,"equipe2":1.42} ; 166 ms
 [+   3s]       comparaison : {"championnat1":"Ligue 1","championnat2":"Bundesliga","niveauDesChampionnatsMesure":true,"message":"Ces deux clubs ne jouent pas dans le même championnat : leur niveau relatif est estimé grâce aux matchs de coupes d'Europe. Estimation moins précise qu'entre deux clubs d'un même championnat."}
-[+   3s]    Ligue des champions : Premier League – Serie A | Man City – Inter | Victoire domicile → HTTP 200 ; etat=ok ; proba=69.6 ; confiance=moyen ; buts attendus={"equipe1":2.48,"equipe2":0.9} ; 170 ms
+[+   3s]    Ligue des champions : Premier League – Serie A | Man City – Inter | Victoire domicile → HTTP 200 ; etat=ok ; proba=69.6 ; confiance=moyen ; buts attendus={"equipe1":2.48,"equipe2":0.9} ; 165 ms
 [+   3s]       comparaison : {"championnat1":"Premier League","championnat2":"Serie A","niveauDesChampionnatsMesure":true,"message":"Ces deux clubs ne jouent pas dans le même championnat : leur niveau relatif est estimé grâce aux matchs de coupes d'Europe. Estimation moins précise qu'entre deux clubs d'un même championnat."}
-[+   3s]    Ligue des champions : Premier League – Serie A | Man City – Inter | Plus de 2.5 buts → HTTP 200 ; etat=ok ; proba=65.1 ; confiance=moyen ; buts attendus={"equipe1":2.48,"equipe2":0.9} ; 150 ms
+[+   3s]    Ligue des champions : Premier League – Serie A | Man City – Inter | Plus de 2.5 buts → HTTP 200 ; etat=ok ; proba=65.1 ; confiance=moyen ; buts attendus={"equipe1":2.48,"equipe2":0.9} ; 168 ms
 [+   3s]       comparaison : {"championnat1":"Premier League","championnat2":"Serie A","niveauDesChampionnatsMesure":true,"message":"Ces deux clubs ne jouent pas dans le même championnat : leur niveau relatif est estimé grâce aux matchs de coupes d'Europe. Estimation moins précise qu'entre deux clubs d'un même championnat."}
-[+   3s]    club connu seulement par une coupe | Arsenal – AEK Larnaca | Victoire domicile → HTTP 200 ; etat=ok ; proba=94.4 ; confiance=moyen ; buts attendus={"equipe1":4.45,"equipe2":0.35} ; 152 ms
+[+   3s]    club connu seulement par une coupe | Arsenal – AEK Larnaca | Victoire domicile → HTTP 200 ; etat=ok ; proba=94.4 ; confiance=moyen ; buts attendus={"equipe1":4.45,"equipe2":0.35} ; 171 ms
 [+   3s]       comparaison : {"championnat1":"Premier League","championnat2":"Autres clubs européens","niveauDesChampionnatsMesure":true,"message":"L'un de ces clubs ne joue dans aucun championnat suivi par l'application : son niveau n'est estimé que d'après ses matchs de coupes d'Europe. Estimation peu précise."}
-[+   4s]    club connu seulement par une coupe | Arsenal – AEK Larnaca | Plus de 2.5 buts → HTTP 200 ; etat=ok ; proba=81 ; confiance=moyen ; buts attendus={"equipe1":4.45,"equipe2":0.35} ; 163 ms
+[+   4s]    club connu seulement par une coupe | Arsenal – AEK Larnaca | Plus de 2.5 buts → HTTP 200 ; etat=ok ; proba=81 ; confiance=moyen ; buts attendus={"equipe1":4.45,"equipe2":0.35} ; 167 ms
 [+   4s]       comparaison : {"championnat1":"Premier League","championnat2":"Autres clubs européens","niveauDesChampionnatsMesure":true,"message":"L'un de ces clubs ne joue dans aucun championnat suivi par l'application : son niveau n'est estimé que d'après ses matchs de coupes d'Europe. Estimation peu précise."}
-[+   4s]    deux clubs connus seulement par une coupe | AEK Larnaca – Aktobe | Victoire domicile → HTTP 200 ; etat=ok ; proba=66.7 ; confiance=faible ; buts attendus={"equipe1":2.27,"equipe2":0.82} ; 153 ms
+[+   4s]    deux clubs connus seulement par une coupe | AEK Larnaca – Aktobe | Victoire domicile → HTTP 200 ; etat=ok ; proba=66.7 ; confiance=faible ; buts attendus={"equipe1":2.27,"equipe2":0.82} ; 167 ms
 [+   4s]       comparaison : {"championnat1":"Autres clubs européens","championnat2":"Autres clubs européens","niveauDesChampionnatsMesure":true,"message":"Aucun de ces clubs ne joue dans un championnat suivi par l'application : leur niveau n'est estimé que d'après leurs matchs de coupes d'Europe. Estimation peu précise."}
-[+   4s]    deux clubs connus seulement par une coupe | AEK Larnaca – Aktobe | Plus de 2.5 buts → HTTP 200 ; etat=ok ; proba=58.7 ; confiance=faible ; buts attendus={"equipe1":2.27,"equipe2":0.82} ; 152 ms
+[+   4s]    deux clubs connus seulement par une coupe | AEK Larnaca – Aktobe | Plus de 2.5 buts → HTTP 200 ; etat=ok ; proba=58.7 ; confiance=faible ; buts attendus={"equipe1":2.27,"equipe2":0.82} ; 166 ms
 [+   4s]       comparaison : {"championnat1":"Autres clubs européens","championnat2":"Autres clubs européens","niveauDesChampionnatsMesure":true,"message":"Aucun de ces clubs ne joue dans un championnat suivi par l'application : leur niveau n'est estimé que d'après leurs matchs de coupes d'Europe. Estimation peu précise."}
-[+   4s]    Championship contre Premier League | Birmingham City – Arsenal | Victoire domicile → HTTP 200 ; etat=ok ; proba=12.6 ; confiance=faible ; buts attendus={"equipe1":0.68,"equipe2":2.15} ; 176 ms
+[+   4s]    Championship contre Premier League | Birmingham City – Arsenal | Victoire domicile → HTTP 200 ; etat=ok ; proba=12.6 ; confiance=faible ; buts attendus={"equipe1":0.68,"equipe2":2.15} ; 188 ms
 [+   4s]       comparaison : {"championnat1":"Championship","championnat2":"Premier League","niveauDesChampionnatsMesure":false,"message":"Ces deux clubs ne jouent pas dans le même championnat, et le niveau relatif de leurs championnats ne repose que sur une estimation générale (peu de matchs de coupes d'Europe) : estimation peu précise."}
-[+   4s]    Championship contre Premier League | Birmingham City – Arsenal | Plus de 2.5 buts → HTTP 200 ; etat=ok ; proba=52.6 ; confiance=faible ; buts attendus={"equipe1":0.68,"equipe2":2.15} ; 152 ms
-[+   4s]       comparaison : {"championnat1":"Championship","championnat2":"Premier League","niveauDesChampionnatsMesure":false,"message":"Ces deux clubs ne jouent pas dans le même championnat, et le niveau relatif de leurs championnats ne repose que sur une estimation générale (peu de matchs de coupes d'Europe) : estimation peu précise."}
-[+   4s]    deux clubs du Championship | Birmingham City – Blackburn Rovers | Victoire domicile → HTTP 200 ; etat=ok ; proba=49.2 ; confiance=moyen ; buts attendus={"equipe1":1.56,"equipe2":1.01} ; 190 ms
-[+   5s]    deux clubs du Championship | Birmingham City – Blackburn Rovers | Plus de 2.5 buts → HTTP 200 ; etat=ok ; proba=47.3 ; confiance=moyen ; buts attendus={"equipe1":1.56,"equipe2":1.01} ; 155 ms
-[+   5s]    Süper Lig contre Liga | Alanyaspor – Real Madrid | Victoire domicile → HTTP 200 ; etat=ok ; proba=10.2 ; confiance=moyen ; buts attendus={"equipe1":0.68,"equipe2":2.33} ; 147 ms
+[+   5s]    Championship contre Premier League | Birmingham City – Arsenal | Plus de 2.5 buts → HTTP 200 ; etat=ok ; proba=52.6 ; confiance=faible ; buts attendus={"equipe1":0.68,"equipe2":2.15} ; 380 ms
+[+   5s]       comparaison : {"championnat1":"Championship","championnat2":"Premier League","niveauDesChampionnatsMesure":false,"message":"Ces deux clubs ne jouent pas dans le même championnat, et le niveau relatif de leurs championnats ne repose que sur une estimation générale (peu de matchs de coupes d'Europe) : estimation peu précise."}
+[+   5s]    deux clubs du Championship | Birmingham City – Blackburn Rovers | Victoire domicile → HTTP 200 ; etat=ok ; proba=49.2 ; confiance=moyen ; buts attendus={"equipe1":1.56,"equipe2":1.01} ; 167 ms
+[+   5s]    deux clubs du Championship | Birmingham City – Blackburn Rovers | Plus de 2.5 buts → HTTP 200 ; etat=ok ; proba=47.3 ; confiance=moyen ; buts attendus={"equipe1":1.56,"equipe2":1.01} ; 174 ms
+[+   5s]    Süper Lig contre Liga | Alanyaspor – Real Madrid | Victoire domicile → HTTP 200 ; etat=ok ; proba=10.2 ; confiance=moyen ; buts attendus={"equipe1":0.68,"equipe2":2.33} ; 174 ms
 [+   5s]       comparaison : {"championnat1":"Süper Lig","championnat2":"Liga","niveauDesChampionnatsMesure":true,"message":"Ces deux clubs ne jouent pas dans le même championnat : leur niveau relatif est estimé grâce aux matchs de coupes d'Europe. Estimation moins précise qu'entre deux clubs d'un même championnat."}
-[+   5s]    Süper Lig contre Liga | Alanyaspor – Real Madrid | Plus de 2.5 buts → HTTP 200 ; etat=ok ; proba=57.3 ; confiance=moyen ; buts attendus={"equipe1":0.68,"equipe2":2.33} ; 150 ms
+[+   5s]    Süper Lig contre Liga | Alanyaspor – Real Madrid | Plus de 2.5 buts → HTTP 200 ; etat=ok ; proba=57.3 ; confiance=moyen ; buts attendus={"equipe1":0.68,"equipe2":2.33} ; 273 ms
 [+   5s]       comparaison : {"championnat1":"Süper Lig","championnat2":"Liga","niveauDesChampionnatsMesure":true,"message":"Ces deux clubs ne jouent pas dans le même championnat : leur niveau relatif est estimé grâce aux matchs de coupes d'Europe. Estimation moins précise qu'entre deux clubs d'un même championnat."}
-[+   5s]    Argentine contre Liga | Aldosivi – Real Madrid | Victoire domicile → HTTP 200 ; etat=ok ; proba=7.4 ; confiance=faible ; buts attendus={"equipe1":0.63,"equipe2":3} ; 148 ms
+[+   5s]    Argentine contre Liga | Aldosivi – Real Madrid | Victoire domicile → HTTP 200 ; etat=ok ; proba=7.4 ; confiance=faible ; buts attendus={"equipe1":0.63,"equipe2":3} ; 188 ms
 [+   5s]       comparaison : {"championnat1":"Liga Profesional argentine","championnat2":"Liga","niveauDesChampionnatsMesure":false,"message":"Ces deux clubs ne jouent pas dans le même championnat, et le niveau relatif de leurs championnats ne repose que sur une estimation générale (peu de matchs de coupes d'Europe) : estimation peu précise."}
-[+   5s]    Argentine contre Liga | Aldosivi – Real Madrid | Plus de 2.5 buts → HTTP 200 ; etat=ok ; proba=67.5 ; confiance=faible ; buts attendus={"equipe1":0.63,"equipe2":3} ; 149 ms
-[+   5s]       comparaison : {"championnat1":"Liga Profesional argentine","championnat2":"Liga","niveauDesChampionnatsMesure":false,"message":"Ces deux clubs ne jouent pas dans le même championnat, et le niveau relatif de leurs championnats ne repose que sur une estimation générale (peu de matchs de coupes d'Europe) : estimation peu précise."}
-[+   5s]    Brasileirão contre Premier League (non mesuré) | Athletico Paranaense – Arsenal | Victoire domicile → HTTP 200 ; etat=ok ; proba=13 ; confiance=faible ; buts attendus={"equipe1":0.73,"equipe2":2.25} ; 175 ms
-[+   5s]       comparaison : {"championnat1":"Brasileirão","championnat2":"Premier League","niveauDesChampionnatsMesure":false,"message":"Ces deux clubs ne jouent pas dans le même championnat, et le niveau relatif de leurs championnats ne repose que sur une estimation générale (peu de matchs de coupes d'Europe) : estimation peu précise."}
-[+   5s]    Brasileirão contre Premier League (non mesuré) | Athletico Paranaense – Arsenal | Plus de 2.5 buts → HTTP 200 ; etat=ok ; proba=56.1 ; confiance=faible ; buts attendus={"equipe1":0.73,"equipe2":2.25} ; 167 ms
-[+   5s]       comparaison : {"championnat1":"Brasileirão","championnat2":"Premier League","niveauDesChampionnatsMesure":false,"message":"Ces deux clubs ne jouent pas dans le même championnat, et le niveau relatif de leurs championnats ne repose que sur une estimation générale (peu de matchs de coupes d'Europe) : estimation peu précise."}
-[+   6s]    Arabie saoudite contre Russie | Abha – Akhmat Grozny | Victoire domicile → HTTP 200 ; etat=ok ; proba=31.9 ; confiance=faible ; buts attendus={"equipe1":1.11,"equipe2":1.38} ; 163 ms
+[+   6s]    Argentine contre Liga | Aldosivi – Real Madrid | Plus de 2.5 buts → HTTP 200 ; etat=ok ; proba=67.5 ; confiance=faible ; buts attendus={"equipe1":0.63,"equipe2":3} ; 306 ms
+[+   6s]       comparaison : {"championnat1":"Liga Profesional argentine","championnat2":"Liga","niveauDesChampionnatsMesure":false,"message":"Ces deux clubs ne jouent pas dans le même championnat, et le niveau relatif de leurs championnats ne repose que sur une estimation générale (peu de matchs de coupes d'Europe) : estimation peu précise."}
+[+   6s]    Brasileirão contre Premier League (non mesuré) | Athletico Paranaense – Arsenal | Victoire domicile → HTTP 200 ; etat=ok ; proba=13 ; confiance=faible ; buts attendus={"equipe1":0.73,"equipe2":2.25} ; 169 ms
+[+   6s]       comparaison : {"championnat1":"Brasileirão","championnat2":"Premier League","niveauDesChampionnatsMesure":false,"message":"Ces deux clubs ne jouent pas dans le même championnat, et le niveau relatif de leurs championnats ne repose que sur une estimation générale (peu de matchs de coupes d'Europe) : estimation peu précise."}
+[+   6s]    Brasileirão contre Premier League (non mesuré) | Athletico Paranaense – Arsenal | Plus de 2.5 buts → HTTP 200 ; etat=ok ; proba=56.1 ; confiance=faible ; buts attendus={"equipe1":0.73,"equipe2":2.25} ; 168 ms
+[+   6s]       comparaison : {"championnat1":"Brasileirão","championnat2":"Premier League","niveauDesChampionnatsMesure":false,"message":"Ces deux clubs ne jouent pas dans le même championnat, et le niveau relatif de leurs championnats ne repose que sur une estimation générale (peu de matchs de coupes d'Europe) : estimation peu précise."}
+[+   6s]    Arabie saoudite contre Russie | Abha – Akhmat Grozny | Victoire domicile → HTTP 200 ; etat=ok ; proba=31.9 ; confiance=faible ; buts attendus={"equipe1":1.11,"equipe2":1.38} ; 200 ms
 [+   6s]       comparaison : {"championnat1":"Saudi Pro League","championnat2":"Premier-Liga russe","niveauDesChampionnatsMesure":false,"message":"Ces deux clubs ne jouent pas dans le même championnat, et le niveau relatif de leurs championnats ne repose que sur une estimation générale (peu de matchs de coupes d'Europe) : estimation peu précise."}
-[+   6s]    Arabie saoudite contre Russie | Abha – Akhmat Grozny | Plus de 2.5 buts → HTTP 200 ; etat=ok ; proba=45.2 ; confiance=faible ; buts attendus={"equipe1":1.11,"equipe2":1.38} ; 169 ms
-[+   6s]       comparaison : {"championnat1":"Saudi Pro League","championnat2":"Premier-Liga russe","niveauDesChampionnatsMesure":false,"message":"Ces deux clubs ne jouent pas dans le même championnat, et le niveau relatif de leurs championnats ne repose que sur une estimation générale (peu de matchs de coupes d'Europe) : estimation peu précise."}
-[+   6s]    club inconnu (attendu : refus clair, aucune probabilité) | Inter Miami – Arsenal | Victoire domicile → HTTP 200 ; etat=equipe_inconnue ; proba=null ; confiance=undefined ; buts attendus=- ; 158 ms
-[+   6s]       message : Équipe introuvable : vérifiez l'orthographe ou utilisez le nom complet du club.
-[+   6s]    club inconnu (attendu : refus clair, aucune probabilité) | Inter Miami – Arsenal | Plus de 2.5 buts → HTTP 200 ; etat=equipe_inconnue ; proba=null ; confiance=undefined ; buts attendus=- ; 160 ms
-[+   6s]       message : Équipe introuvable : vérifiez l'orthographe ou utilisez le nom complet du club.
-[+   6s] club inconnu → etat=equipe_inconnue ; message=Équipe introuvable : vérifiez l'orthographe ou utilisez le nom complet du club.
-[+   6s] === Mon coupon (3 sélections) === HTTP 200 ; 158 ms
-[+   6s]    Arsenal – Real Madrid | Victoire domicile → etat=ok ; proba=59.5 ; comparaison=oui
-[+   6s]    Paris SG – Bayern Munich | Plus de 1.5 buts → etat=ok ; proba=80 ; comparaison=oui
-[+   6s]    Arsenal – Chelsea | Les deux équipes marquent → etat=ok ; proba=54.4 ; comparaison=non
-[+   6s]    clés de la réponse : legs ; total : {}
-[+   6s] === Coupon automatique (sans IA ne se choisit pas : l'IA relit, quelques appels) ===
-[+   7s] HTTP 200 ; 160 ms
+[+   7s]    Arabie saoudite contre Russie | Abha – Akhmat Grozny | Plus de 2.5 buts → HTTP 200 ; etat=ok ; proba=45.2 ; confiance=faible ; buts attendus={"equipe1":1.11,"equipe2":1.38} ; 260 ms
+[+   7s]       comparaison : {"championnat1":"Saudi Pro League","championnat2":"Premier-Liga russe","niveauDesChampionnatsMesure":false,"message":"Ces deux clubs ne jouent pas dans le même championnat, et le niveau relatif de leurs championnats ne repose que sur une estimation générale (peu de matchs de coupes d'Europe) : estimation peu précise."}
+[+   7s]    club inconnu (attendu : refus clair, aucune probabilité) | Inter Miami – Arsenal | Victoire domicile → HTTP 200 ; etat=equipe_inconnue ; proba=null ; confiance=undefined ; buts attendus=- ; 196 ms
+[+   7s]       message : Équipe introuvable : vérifiez l'orthographe ou utilisez le nom complet du club.
+[+   7s]    club inconnu (attendu : refus clair, aucune probabilité) | Inter Miami – Arsenal | Plus de 2.5 buts → HTTP 200 ; etat=equipe_inconnue ; proba=null ; confiance=undefined ; buts attendus=- ; 168 ms
+[+   7s]       message : Équipe introuvable : vérifiez l'orthographe ou utilisez le nom complet du club.
+[+   7s] club inconnu → etat=equipe_inconnue ; message=Équipe introuvable : vérifiez l'orthographe ou utilisez le nom complet du club.
+[+   7s] === Mon coupon (3 sélections) === HTTP 200 ; 171 ms
+[+   7s]    Arsenal – Real Madrid | Victoire domicile → etat=ok ; proba=59.5 ; comparaison=oui
+[+   7s]    Paris SG – Bayern Munich | Plus de 1.5 buts → etat=ok ; proba=80 ; comparaison=oui
+[+   7s]    Arsenal – Chelsea | Les deux équipes marquent → etat=ok ; proba=54.4 ; comparaison=non
+[+   7s]    clés de la réponse : legs ; total : {}
+[+   7s] === Coupon automatique (sans IA ne se choisit pas : l'IA relit, quelques appels) ===
+[+   7s] HTTP 200 ; 184 ms
 {
  "resultats": [
   {
@@ -249,12 +249,12 @@
     "victoires": 5,
     "nu
 [+   7s] === Top Matchs ===
-[+   7s] HTTP 200 ; 158 ms
-[+   7s]    Brasileirão | Mirassol – Internacional | Victoire ou nul domicile | 81 % | confiance=moyen | comparaison=non | 2026-10-16T23:00:00.000Z
-[+   7s]    Bundesliga | Eintracht Frankfurt – Köln | Plus de 2.5 buts | 71.6 % | confiance=moyen | comparaison=non | 2026-10-16T18:30:00.000Z
-[+   7s]    Eredivisie | Heerenveen – Excelsior | Victoire/nul domicile + 0.5 buts plus | 67.6 % | confiance=moyen | comparaison=non | 2026-10-16T18:00:00.000Z
-[+   7s]    méta : {"fenetreHeures":72,"donnees":{"championnatsPrets":["PL","PD","SA","BL1","FL1","PPL","DED","BSA","SPL","BJL"],"coupesPretes":["UCL","UEL","UECL"],"enAttente":[],"enEchec":[],"sources":["thesportsdb"]},"ia":"ok"}
-[+   7s] === Bilan === états : {"principal:pret":13,"complementaire:pret":20} ; remarques : [] ; avertissements : []
-[+   7s] /health → HTTP 200 {"ok":true,"version":"2.0.0","uptimeSec":193}
-[+   7s] TERMINÉ SANS PROBLÈME
+[+   8s] HTTP 200 ; 166 ms
+[+   8s]    Brasileirão | Mirassol – Internacional | Victoire ou nul domicile | 81 % | confiance=moyen | comparaison=non | 2026-10-16T23:00:00.000Z
+[+   8s]    Bundesliga | Eintracht Frankfurt – Köln | Plus de 2.5 buts | 71.6 % | confiance=moyen | comparaison=non | 2026-10-16T18:30:00.000Z
+[+   8s]    Eredivisie | Heerenveen – Excelsior | Victoire/nul domicile + 0.5 buts plus | 67.6 % | confiance=moyen | comparaison=non | 2026-10-16T18:00:00.000Z
+[+   8s]    méta : {"fenetreHeures":72,"donnees":{"championnatsPrets":["PL","PD","SA","BL1","FL1","PPL","DED","BSA","SPL","BJL"],"coupesPretes":["UCL","UEL","UECL"],"enAttente":[],"enEchec":[],"sources":["thesportsdb"]},"ia":"ok"}
+[+   8s] === Bilan === états : {"principal:pret":13,"complementaire:pret":20} ; remarques : [] ; avertissements : []
+[+   8s] /health → HTTP 200 {"ok":true,"version":"2.0.0","uptimeSec":1713}
+[+   8s] TERMINÉ SANS PROBLÈME
 CODE=0
