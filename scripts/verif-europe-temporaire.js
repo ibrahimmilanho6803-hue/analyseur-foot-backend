@@ -81,6 +81,19 @@ async function main() {
   }
   if (!loadedAt) bad("Les championnats principaux et la Ligue des champions ne sont pas tous chargés après 20 minutes.");
 
+  // 2b. Attendre les championnats complémentaires (chargés en arrière-plan, après l'essentiel).
+  for (let i = 0; i < 30; i++) {
+    const r = await call("/api/status", {}, 60000);
+    if (r.status === 200 && r.json) {
+      status = r.json;
+      const ex = ((status.donnees && status.donnees.championnats) || []).filter((c) => c.couvert && c.niveau === "complementaire");
+      const states = countBy(ex, (c) => c.etat);
+      out(`complémentaires : ${JSON.stringify(states)}`);
+      if (!states.chargement) break;
+    }
+    await sleep(30000);
+  }
+
   // 3. État détaillé.
   const eu = status.europe || {};
   out("=== /api/status ===");
@@ -114,8 +127,7 @@ async function main() {
   // 5. Analyses sans IA.
   out("=== Analyses (sans IA) ===");
   const pick = (re, key) => (teams.find((t) => (!key || t.championnat === key) && re.test(t.nom)) || {}).nom;
-  const ext = teams.find((t) => t.championnat === "ELC");
-  const extB = teams.filter((t) => t.championnat === "ELC")[1];
+  const first = (key, n = 0) => (teams.filter((t) => t.championnat === key)[n] || {}).nom;
   const pairs = [
     ["Arsenal", "Chelsea", "même championnat (référence)", true],
     ["Arsenal", "Real Madrid", "Ligue des champions : Premier League – Liga", true],
@@ -123,9 +135,12 @@ async function main() {
     ["Man City", "Inter", "Ligue des champions : Premier League – Serie A", true],
     ["Arsenal", euro[0] && euro[0].nom, "club connu seulement par une coupe", Boolean(euro[0])],
     [euro[0] && euro[0].nom, euro[1] && euro[1].nom, "deux clubs connus seulement par une coupe", Boolean(euro[1])],
-    [ext && ext.nom, "Arsenal", "championnat complémentaire contre principal", Boolean(ext)],
-    [ext && ext.nom, extB && extB.nom, "deux clubs du même championnat complémentaire", Boolean(extB)],
-    [pick(/Boca/i), "Real Madrid", "Argentine – Liga (niveau non mesuré)", Boolean(pick(/Boca/i))],
+    [first("ELC"), "Arsenal", "Championship contre Premier League", Boolean(first("ELC"))],
+    [first("ELC"), first("ELC", 1), "deux clubs du Championship", Boolean(first("ELC", 1))],
+    [first("TSL"), "Real Madrid", "Süper Lig contre Liga", Boolean(first("TSL"))],
+    [first("ARG"), "Real Madrid", "Argentine contre Liga", Boolean(first("ARG"))],
+    [first("BSA"), "Arsenal", "Brasileirão contre Premier League (non mesuré)", Boolean(first("BSA"))],
+    [first("KSA"), first("RPL"), "Arabie saoudite contre Russie", Boolean(first("KSA") && first("RPL"))],
     ["Inter Miami", "Arsenal", "club inconnu (attendu : refus clair, aucune probabilité)", false],
   ];
   for (const [a, b, what, mustWork] of pairs) {
@@ -146,6 +161,20 @@ async function main() {
   }
   const unknown = await post("/api/analyze", { equipe1: "Inter Miami", equipe2: "Arsenal", typePari: "Victoire domicile", ia: false });
   if (unknown.json && unknown.json.probabilite != null) bad("Un club inconnu a reçu une probabilité.");
+  out(`club inconnu → etat=${unknown.json && unknown.json.etat} ; message=${unknown.json && unknown.json.message}`);
+  if (unknown.json && unknown.json.etat !== "equipe_inconnue") bad(`Un club inconnu devrait donner etat=equipe_inconnue une fois tout chargé (obtenu : ${unknown.json && unknown.json.etat}).`);
+
+  // 5b. « Mon coupon » : plusieurs sélections (dont une entre championnats) dans une seule requête.
+  const multi = await post(
+    "/api/analyze",
+    { ia: false, legs: [{ equipe1: "Arsenal", equipe2: "Real Madrid", typePari: "Victoire domicile" }, { equipe1: "PSG", equipe2: "Bayern", typePari: "Plus de 1.5 buts" }, { equipe1: "Arsenal", equipe2: "Chelsea", typePari: "Les deux équipes marquent" }] },
+    120000
+  );
+  out(`=== Mon coupon (3 sélections) === HTTP ${multi.status} ; ${multi.ms} ms`);
+  const mj = multi.json || {};
+  for (const r of mj.resultats || mj.legs || []) out(`   ${r.equipe1} – ${r.equipe2} | ${r.typePari} → etat=${r.etat} ; proba=${r.probabilite} ; comparaison=${r.comparaisonEntreChampionnats ? "oui" : "non"}`);
+  out(`   clés de la réponse : ${Object.keys(mj).join(", ")} ; total : ${JSON.stringify({ probabiliteCombinee: mj.probabiliteCombinee, coteTotale: mj.coteTotale })}`);
+  if (multi.status !== 200) bad(`« Mon coupon » à trois sélections répond HTTP ${multi.status}.`);
 
   // 6. Coupon automatique sur des matchs mélangés.
   out("=== Coupon automatique (sans IA ne se choisit pas : l'IA relit, quelques appels) ===");
