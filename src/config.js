@@ -106,9 +106,7 @@ function loadConfig(env = process.env) {
       count: 3,
       windowHours: num(env.TOP_WINDOW_HOURS, 72),
       maxWindowHours: num(env.TOP_MAX_WINDOW_HOURS, 168),
-      minLegP: 0.55,
-      maxLegP: 0.88,
-      targetOdds: num(env.TOP_TARGET_ODDS, 2.5),
+      // Aucune limite de cote ni plage de probabilité : « Top Matchs » et « Auto » retiennent le pari le plus fiable (voir picks.js).
       budgetMs: 25000,
     },
   };

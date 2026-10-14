@@ -2,7 +2,7 @@
 
 const { round, DAY_MS } = require("./util");
 const { fitLeague, expectedGoals, scoreMatrix } = require("./model");
-const { MARKETS, evaluateAll } = require("./markets");
+const { MARKETS, evaluate, evaluateAll } = require("./markets");
 const { bestForFixture } = require("./picks");
 
 // Contrôle de fiabilité « pas à pas » : pour chaque semaine récente, le modèle est ajusté
@@ -46,7 +46,7 @@ function newAcc() {
 }
 
 function runLeague(acc, key, finished, opts) {
-  const { now, evalDays, stepDays, minTrain, model, pick } = opts;
+  const { now, evalDays, stepDays, minTrain, model, pick } = opts; // pick : faux = on ne mesure pas les paris automatiques (plus rapide)
   const from = now - evalDays * DAY_MS;
   const local = { n: 0, bm: 0, br: 0, goalsPred: 0, goalsReal: 0 };
   for (let t = from; t < now; t += stepDays * DAY_MS) {
@@ -69,7 +69,9 @@ function runLeague(acc, key, finished, opts) {
     for (const m of block) {
       if (!fit.teams.has(m.home.id) || !fit.teams.has(m.away.id)) continue; // équipe inconnue du modèle à cette date
       const { lh, la } = expectedGoals(fit, m.home.id, m.away.id);
-      const probs = evaluateAll(scoreMatrix(lh, la, { rho: model.rho, maxGoals: model.maxGoals }));
+      const matrix = scoreMatrix(lh, la, { rho: model.rho, maxGoals: model.maxGoals });
+      // Les paris automatiques demandent tous les types de paris ; sans eux, seuls les marchés suivis sont calculés.
+      const probs = pick ? evaluateAll(matrix) : EVAL.map((mk) => ({ label: mk.label, p: evaluate(matrix, mk).p }));
       const pOf = new Map(probs.map((x) => [x.label, x.p]));
       acc.matches++;
       acc.goals.n++;
@@ -112,7 +114,7 @@ function runLeague(acc, key, finished, opts) {
       local.bm += bm;
       local.br += br;
       // Le pari que l'application choisirait pour ce match.
-      const best = bestForFixture(probs, pick);
+      const best = pick ? bestForFixture(probs) : null;
       if (best) {
         const mk = MARKETS.find((x) => x.label === best.label);
         acc.picks.n++;
@@ -177,7 +179,7 @@ function report(acc, opts) {
     calibration,
     paris: acc.picks.n
       ? {
-          description: "Pari choisi automatiquement pour chaque match (le plus probable entre 55 % et 88 %)",
+          description: "Pari choisi automatiquement pour chaque match (le plus fiable : le plus probable de tous les types de paris, quelle que soit sa cote)",
           matchs: acc.picks.n,
           probabiliteMoyennePredite: round(predicted, 3),
           tauxDeReussiteReel: round(hitRate, 3),
@@ -209,14 +211,14 @@ function report(acc, opts) {
 
 const defer = () => new Promise((resolve) => setImmediate(resolve));
 
-function prepare({ now = Date.now(), evalDays = 120, stepDays = 7, minTrain = 120, model, pick = { minP: 0.55, maxP: 0.88 } } = {}) {
+function prepare({ now = Date.now(), evalDays = 120, stepDays = 7, minTrain = 120, model, pick = true } = {}) {
   return {
     now,
     evalDays,
     stepDays,
     minTrain,
     model: { halfLifeDays: 300, priorMatches: 10, rho: -0.08, maxGoals: 9, levelHalfLifeDays: 0, levelPriorMatches: 40, strengthExponent: 1, levelFactor: 1, ...model },
-    pick,
+    pick: Boolean(pick),
   };
 }
 
@@ -245,7 +247,7 @@ async function tuneModel(leagues, { now = Date.now(), current, grid, model = {},
   const candidates = [];
   for (const halfLifeDays of grid.halfLifeDays) {
     for (const priorMatches of grid.priorMatches) {
-      const r = await runBacktestAsync(leagues, { now, evalDays, stepDays, model: { ...model, halfLifeDays, priorMatches } }, yieldFn);
+      const r = await runBacktestAsync(leagues, { now, evalDays, stepDays, pick: false, model: { ...model, halfLifeDays, priorMatches } }, yieldFn);
       if (r.resultat1N2) candidates.push({ halfLifeDays, priorMatches, brier1N2: r.resultat1N2.brierModele, matchs: r.matchsEvalues });
     }
   }

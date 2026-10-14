@@ -31,6 +31,7 @@ const SYSTEM = [
   "Le modèle statistique (buts attendus, forme, bilans) est la référence : tu ne le remplaces pas.",
   "Tu peux corriger sa probabilité de quelques points seulement si tu connais un facteur concret et fiable que les chiffres ne voient pas (rivalité, enjeu du match, style de jeu connu).",
   "N'invente jamais un fait : aucune blessure, composition, suspension ou résultat dont tu n'es pas certain. Dans le doute, l'ajustement est 0.",
+  "Pour un pari à ligne entière (par exemple « plus de 2 buts »), la mise est remboursée quand le nombre de buts tombe exactement sur la ligne : la probabilité fournie est celle de GAGNER, le remboursement est indiqué à part.",
   "Réponds en français, clairement et en deux phrases au maximum pour la justification.",
 ].join(" ");
 
@@ -58,7 +59,8 @@ function buildPrompt(ctx) {
     );
   }
   rows.push(`Pari étudié : ${bet.label}`);
-  rows.push(`Probabilité du modèle : ${pct(bet.p)} (cote équitable ${round(1 / bet.p, 2)})`);
+  rows.push(`Probabilité du modèle : ${pct(bet.p)}${bet.push ? " de gagner" : ""} (cote équitable ${round((1 - (bet.push || 0)) / bet.p, 2)})`);
+  if (bet.push) rows.push(`Pari à ligne entière : la mise est remboursée si le nombre de buts tombe exactement sur la ligne (${pct(bet.push)} des cas selon le modèle) ; il n'est perdu que dans ${pct(Math.max(0, 1 - bet.p - bet.push))} des cas.`);
   rows.push(`Buts attendus : ${home} ${round(lh, 2)} — ${away} ${round(la, 2)}`);
   if (outcomes) {
     rows.push(

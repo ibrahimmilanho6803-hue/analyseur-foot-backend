@@ -2,7 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { createAi, buildPrompt, buildBody, parseReview, SCHEMA, API_URL } = require("../src/ai");
+const { createAi, buildPrompt, buildBody, parseReview, SCHEMA, SYSTEM, API_URL } = require("../src/ai");
 const { createHttp, HttpError } = require("../src/http");
 const { loadConfig } = require("../src/config");
 
@@ -308,4 +308,16 @@ test("la clé n'apparaît jamais dans l'état exposé ni dans les erreurs", asyn
   const r = await ai.review(CTX);
   const dump = JSON.stringify([r, ai.status()]);
   assert.ok(!dump.includes("sk-ant-test-key"), dump);
+});
+
+test("pari à ligne entière : la règle du remboursement est expliquée à l'IA, avec la cote équitable qui en tient compte", () => {
+  const prompt = buildPrompt({ ...CTX, bet: { label: "Plus de 2 buts", p: 0.49, push: 0.26 } });
+  assert.match(prompt, /Probabilité du modèle : 49 % de gagner \(cote équitable 1\.51\)/);
+  assert.match(prompt, /remboursée si le nombre de buts tombe exactement sur la ligne \(26 % des cas/);
+  assert.match(prompt, /perdu que dans 25 % des cas/);
+  assert.match(SYSTEM, /ligne entière/);
+  // Un pari ordinaire ne parle pas de remboursement.
+  const plain = buildPrompt(CTX);
+  assert.doesNotMatch(plain, /remboursée/);
+  assert.match(plain, /Probabilité du modèle : 81 % \(cote équitable 1\.23\)/);
 });

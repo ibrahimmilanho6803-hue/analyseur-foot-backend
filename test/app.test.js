@@ -672,7 +672,7 @@ test("POST /api/auto-coupon : un coupon mêlant championnat, coupe d'Europe et c
     assert.deepEqual(r.json.resultats.map((x) => Boolean(x.comparaisonEntreChampionnats)), [false, true, true]);
     assert.deepEqual(r.json.resultats.map((x) => x.competition), ["Premier League", "Ligue des champions", "Ligue des champions"]);
     assert.equal(r.json.analyses, 3);
-    assert.ok(Number(r.json.coteTotale) > 1.5);
+    assert.ok(Number(r.json.coteTotale) > 1);
   } finally {
     await s.close();
   }

@@ -36,13 +36,16 @@ test("réglage automatique et contrôle : sur des données bien décrites par le
   assert.deepEqual(tuner.status().retenu, { halfLifeDays, priorMatches });
 });
 
-test("résultats récents sans lien avec la force des équipes : les probabilités des paris automatiques sont abaissées", async () => {
+test("résultats récents avec bien plus de 0-0 que prévu : les probabilités des paris automatiques (des paris très sûrs) sont abaissées", async () => {
   const w = bigWorld();
   const rand = mulberry32(5);
   const cut = NOW - 150 * DAY;
+  // Un match sur six se termine 0-0, sans rapport avec la force des équipes : « plus de 0.5 buts » et « une équipe moins de 2.5 buts »,
+  // les paris les plus fiables du modèle, échouent bien plus souvent que prévu.
+  const dull = (m) => (rand() < 1 / 6 ? { ...m, hg: 0, ag: 0 } : { ...m, hg: poissonSample(1.9, rand), ag: poissonSample(1.5, rand) });
   for (const key of Object.keys(w.store)) {
     for (const season of ["cur", "prev"]) {
-      w.store[key][season] = w.store[key][season].map((m) => (m.status === "finished" && m.kickoff >= cut ? { ...m, hg: poissonSample(1.45, rand), ag: poissonSample(1.15, rand) } : m));
+      w.store[key][season] = w.store[key][season].map((m) => (m.status === "finished" && m.kickoff >= cut ? dull(m) : m));
     }
   }
   const tuner = createTuner({ config: w.config, data: w.data, analysis: w.analysis, now: () => w.clock.t, log: quiet });

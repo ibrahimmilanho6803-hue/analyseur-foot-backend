@@ -81,7 +81,7 @@ function createTuner({ config, data, analysis = null, now = Date.now, log = cons
       if (config.model.calibration === false) {
         niveau = { factor: 1, info: { applique: false, raison: "correction désactivée (MODEL_CALIBRATION=off)" } };
       } else {
-        const bt = await runBacktestAsync(leagues, { now: now(), evalDays: 180, stepDays: 14, model: { ...fixed, ...current, ...result.retenu, levelFactor: 1 } });
+        const bt = await runBacktestAsync(leagues, { now: now(), evalDays: 180, stepDays: 14, pick: false, model: { ...fixed, ...current, ...result.retenu, levelFactor: 1 } });
         niveau = levelCalibration(bt, { minMatches: levelMinMatches });
       }
 
@@ -106,7 +106,6 @@ function createTuner({ config, data, analysis = null, now = Date.now, log = cons
           evalDays: 150,
           stepDays: 7,
           model: { ...fixed, ...data.getModelParams() },
-          pick: { minP: config.top.minLegP, maxP: config.top.maxLegP },
         });
         const cal = pickCalibration(bt.paris);
         analysis.setPickShift(cal.shift, cal.info);

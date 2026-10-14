@@ -173,3 +173,16 @@ test("rythme : le rapprocher de la moyenne améliore les totaux de buts sans ab�
   assert.equal(calm.parametres.modele.exposantForce, null);
   assert.equal(plain.parametres.modele.exposantRythme, null);
 });
+
+test("paris automatiques du rapport : le pari le plus fiable de chaque match (sans plage de probabilité) ; pick:false les ignore sans rien changer d'autre", () => {
+  const withPicks = runBacktest(leagues, OPTS);
+  assert.match(withPicks.paris.description, /le plus fiable/);
+  assert.doesNotMatch(withPicks.paris.description, /55|88/);
+  assert.ok(withPicks.paris.probabiliteMoyennePredite > 0.9, `probabilité moyenne annoncée : ${withPicks.paris.probabiliteMoyennePredite}`);
+  const without = runBacktest(leagues, { ...OPTS, pick: false });
+  assert.equal(without.paris, null);
+  assert.deepEqual(without.marches, withPicks.marches);
+  assert.deepEqual(without.resultat1N2, withPicks.resultat1N2);
+  assert.deepEqual(without.calibration, withPicks.calibration);
+  assert.deepEqual(without.butsParMatch, withPicks.butsParMatch);
+});

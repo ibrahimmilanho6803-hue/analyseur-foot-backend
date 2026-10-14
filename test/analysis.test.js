@@ -272,3 +272,52 @@ test("les noms courants des grands clubs sont reconnus sans aucun nom alternatif
     ]
   );
 });
+
+test("pari à ligne entière : probabilité de gagner, probabilité de remboursement, règle et cote équitable qui en tient compte", async () => {
+  const w = buildWorld({ aiBehaviour: "off" });
+  const [over2, over25, under1, team] = await w.analysis.analyzeLegs([
+    leg("Arsenal", "Chelsea", "Plus de 2 buts"),
+    leg("Arsenal", "Chelsea", "Plus de 2.5 buts"),
+    leg("Arsenal", "Chelsea", "Moins de 1 but"),
+    leg("Arsenal", "Chelsea", "Equipe 1 plus de 1 but"),
+  ]);
+  assert.equal(over2.etat, "ok");
+  assert.equal(over2.typePari, "Plus de 2 buts");
+  // On gagne « plus de 2 » exactement comme « plus de 2.5 » (3 buts ou plus) ; à 2 buts pile la mise est rendue.
+  assert.equal(over2.probabilite, over25.probabilite);
+  assert.ok(over2.probabiliteRemboursement > 10 && over2.probabiliteRemboursement < 40, `remboursement ${over2.probabiliteRemboursement}`);
+  assert.match(over2.regleRemboursement, /^Si le match se termine avec exactement 2 buts, la mise est remboursée/);
+  assert.match(over2.justification, /de chances d'être gagné/);
+  assert.match(over2.justification, /remboursée/);
+  // Cote équitable = (1 − P(remboursé)) ÷ P(gagné) : plus basse que celle du pari à demi-but, qui n'a pas de remboursement.
+  const expected = (1 - over2.probabiliteRemboursement / 100) / (over2.probabilite / 100);
+  assert.ok(Math.abs(over2.coteEstimee - expected) < 0.03, `${over2.coteEstimee} contre ${expected}`);
+  assert.ok(over2.coteEstimee < over25.coteEstimee);
+  assert.equal(over25.probabiliteRemboursement, undefined);
+  assert.equal(over25.regleRemboursement, undefined);
+  assert.doesNotMatch(over25.justification, /remboursée/);
+  // Les lignes entières d'une équipe parlent de cette équipe.
+  assert.match(team.regleRemboursement, /^Si Arsenal FC marque exactement 1 but/);
+  assert.ok(team.probabilite + team.probabiliteRemboursement < 100);
+  assert.match(under1.regleRemboursement, /exactement 1 but,/);
+});
+
+test("pari à ligne entière : l'IA reçoit la probabilité de remboursement et la règle", async () => {
+  const w = buildWorld();
+  await w.analysis.analyzeLegs([leg("Arsenal", "Chelsea", "Plus de 2 buts"), leg("Arsenal", "Chelsea", "Plus de 2.5 buts")]);
+  const withPush = w.ai.calls.find((c) => c.bet.label === "Plus de 2 buts");
+  const without = w.ai.calls.find((c) => c.bet.label === "Plus de 2.5 buts");
+  assert.ok(withPush.bet.push > 0.1 && withPush.bet.push < 0.4, `push ${withPush.bet.push}`);
+  assert.equal(without.bet.push, undefined);
+});
+
+test("finalProbability : pour un pari remboursable, gagner + être remboursé ne dépasse jamais 100 %", () => {
+  const { finalProbability } = buildWorld().analysis;
+  const r = finalProbability(0.9, { adjustment: 4 }, false, 0.08);
+  assert.ok(Math.abs(r.p - 0.915) < 1e-9, `p = ${r.p}`);
+  assert.equal(r.adjustment, 1.5);
+  // Une correction négative n'est pas touchée, et sans remboursement rien ne change.
+  assert.ok(Math.abs(finalProbability(0.5, { adjustment: -3 }, false, 0.2).p - 0.47) < 1e-9);
+  assert.ok(Math.abs(finalProbability(0.9, { adjustment: 4 }, false).p - 0.94) < 1e-9);
+  assert.ok(Math.abs(finalProbability(0.9, { adjustment: 4 }, false, 0).p - 0.94) < 1e-9);
+});

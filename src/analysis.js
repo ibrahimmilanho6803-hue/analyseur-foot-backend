@@ -4,10 +4,9 @@ const { clamp, round } = require("./util");
 const { SwrCache } = require("./cache");
 const { findTeam } = require("./teams");
 const { expectedGoals, scoreMatrix, dataQuality } = require("./model");
-const { MARKETS, resolveMarket, evaluate, describeMatrix } = require("./markets");
+const { MARKETS, resolveMarket, evaluate, describeMatrix, refundRule } = require("./markets");
 const { OTHER_KEY } = require("./leagues");
 const { matchStats } = require("./stats");
-const { thinLegs, selectCoupon, bestForFixture } = require("./picks");
 
 const LEVELS = ["faible", "moyen", "eleve"];
 const WARNING_ODDS = "Cotes estimées (1 ÷ probabilité), sans marge de bookmaker : les cotes réelles proposées par un opérateur seront plus basses.";
@@ -44,8 +43,10 @@ function createAnalysis({ config, data, ai, europe = null, now = Date.now, log =
     return LEVELS[idx];
   }
 
-  function modelJustification({ home, away, bet, core, stats }) {
-    const parts = [`Le modèle attend ${dec(core.lh)} but pour ${home} et ${dec(core.la)} pour ${away} : « ${bet.label} » est estimé à ${Math.round(bet.p * 100)} %.`];
+  // `rule` : règle de remboursement d'un pari à ligne entière (voir markets.js), avec bet.push = probabilité de remboursement.
+  function modelJustification({ home, away, bet, core, stats, rule = null }) {
+    const parts = [`Le modèle attend ${dec(core.lh)} but pour ${home} et ${dec(core.la)} pour ${away} : « ${bet.label} » est estimé à ${Math.round(bet.p * 100)} %${bet.push ? " de chances d'être gagné" : ""}.`];
+    if (bet.push && rule) parts.push(`${rule} Ce cas arrive dans ${Math.round(bet.push * 100)} % des scénarios.`);
     const f1 = stats.statsEquipe1 && stats.statsEquipe1.forme;
     const f2 = stats.statsEquipe2 && stats.statsEquipe2.forme;
     if (f1 && f2) parts.push(`Forme récente (du plus récent au plus ancien) : ${home} ${f1}, ${away} ${f2}.`);
@@ -89,11 +90,18 @@ function createAnalysis({ config, data, ai, europe = null, now = Date.now, log =
   };
 
   // Probabilité finale = modèle + petite correction de l'IA (bornée, nulle pour les scores exacts).
-  function finalProbability(pModel, review, exact) {
+  // `push` : probabilité de remboursement d'un pari à ligne entière. Gagner et être remboursé ne dépassent jamais 100 % à eux deux.
+  function finalProbability(pModel, review, exact, push = 0) {
     if (!review || exact) return { p: pModel, adjustment: 0 };
     const cap = Math.min(config.anthropic.maxAdjustPoints, 0.2 * pModel * 100);
-    const adjustment = clamp(review.adjustment, -cap, cap);
-    return { p: clamp(pModel + adjustment / 100, 0.01, 0.99), adjustment: round(adjustment, 1) };
+    let adjustment = clamp(review.adjustment, -cap, cap);
+    let p = clamp(pModel + adjustment / 100, 0.01, 0.99);
+    const ceiling = 1 - push - 0.005;
+    if (push > 0 && p > ceiling) {
+      p = Math.max(pModel, ceiling);
+      adjustment = (p - pModel) * 100;
+    }
+    return { p, adjustment: round(adjustment, 1) };
   }
 
   // ---------- Reconnaissance des équipes ----------
@@ -253,8 +261,12 @@ function createAnalysis({ config, data, ai, europe = null, now = Date.now, log =
     const ev = evaluate(core.matrix, market);
     const pModel = ev.p;
     const exact = Boolean(market.exact);
-    const pCal = exact ? pModel : clamp(pModel + shift, 0.01, 0.99);
-    const bet = { label: market.label, p: pCal };
+    // Pari à ligne entière (« plus de 2 buts ») : `push` = probabilité d'être remboursé, `pModel` = celle de gagner.
+    const push = ev.push || 0;
+    const rule = refundRule(market, r.home.name, r.away.name);
+    // La correction des paris automatiques ne doit pas faire dépasser 100 % à « gagner + remboursé ».
+    const pCal = exact ? pModel : clamp(pModel + shift, 0.01, push > 0 ? Math.min(0.99, Math.max(0.01, 1 - push - 0.005)) : 0.99);
+    const bet = { label: market.label, p: pCal, ...(rule ? { push } : {}) };
 
     let ia = { statut: !withAi && ai.enabled ? "non_demandee" : "desactivee" };
     let review = null;
@@ -280,12 +292,12 @@ function createAnalysis({ config, data, ai, europe = null, now = Date.now, log =
       ia = { statut: "non_applicable" };
     }
 
-    const fin = finalProbability(pCal, review, exact);
+    const fin = finalProbability(pCal, review, exact, push);
     const justification = exact
       ? `Score le plus probable selon le modèle : ${ev.detail} (${Math.round(pModel * 100)} %). Un score exact reste un pari très risqué.`
       : review
         ? review.justification
-        : modelJustification({ home: r.home.name, away: r.away.name, bet, core, stats });
+        : modelJustification({ home: r.home.name, away: r.away.name, bet, core, stats, rule });
 
     return {
       etat: "ok",
@@ -298,7 +310,10 @@ function createAnalysis({ config, data, ai, europe = null, now = Date.now, log =
       probabiliteModele: pct1(pModel),
       ...(shift ? { ajustementCalibrage: round(shift * 100, 1) } : {}),
       ajustementIA: fin.adjustment,
-      coteEstimee: round(1 / fin.p, 2),
+      // Cote équitable : avec un remboursement possible, (1 − P(remboursé)) ÷ P(gagné) ; sinon 1 ÷ probabilité.
+      coteEstimee: round((1 - push) / fin.p, 2),
+      // Pari à ligne entière : `probabilite` est celle de GAGNER ; la mise est rendue dans `probabiliteRemboursement` des cas.
+      ...(rule ? { probabiliteRemboursement: pct1(push), regleRemboursement: rule } : {}),
       niveauConfiance: confidence(core.quality, fin.p, review && review.confiance),
       justification,
       vigilance: review ? review.vigilance : "",

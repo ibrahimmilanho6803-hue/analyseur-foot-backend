@@ -6,6 +6,23 @@ const { buildWorld, HOUR, NOW } = require("./world");
 
 const REQUIRED = ["id", "homeTeam", "awayTeam", "competition", "date", "meilleurPari", "probabilite", "niveauConfiance", "justification", "statsHome", "statsAway"];
 
+// Contrôle indépendant du choix du serveur : pour chaque match à venir de la fenêtre, le pari le plus probable de tous les types de paris
+// (hors paris à ligne entière, remboursables), classé par probabilité + 1 point par niveau de données.
+async function oracleTop(w, hours = 72) {
+  const out = [];
+  for (const key of ["PL", "PD", "SA"]) {
+    const ld = await w.data.getLeagueData(key);
+    for (const f of ld.fixtures) {
+      if (f.kickoff <= NOW || f.kickoff > NOW + hours * HOUR) continue;
+      const core = w.analysis.computeCore(ld, f.home.id, f.away.id);
+      let best = null;
+      for (const x of core.probs) if (!x.refund && (!best || x.p > best.p + 1e-9)) best = x;
+      out.push({ id: f.id, label: best.label, p: best.p, quality: core.quality.level, score: best.p + 0.01 * core.quality.level });
+    }
+  }
+  return out.sort((a, b) => b.score - a.score);
+}
+
 test("Top 3 : trois matchs différents, dans la fenêtre, au format attendu par l'application", async () => {
   const w = buildWorld();
   const r = await w.coupons.topMatches();
@@ -18,7 +35,7 @@ test("Top 3 : trois matchs différents, dans la fenêtre, au format attendu par 
     assert.equal(typeof m.probabilite, "number");
     assert.ok(Date.parse(m.date) > NOW && Date.parse(m.date) <= NOW + 72 * HOUR);
     assert.ok(["faible", "moyen", "eleve"].includes(m.niveauConfiance));
-    assert.ok(m.probabilite >= 50 && m.probabilite <= 93, `probabilité hors plage : ${m.probabilite}`);
+    assert.ok(m.probabilite >= 60 && m.probabilite <= 99, `probabilité hors plage : ${m.probabilite}`);
     assert.ok(Math.abs(m.coteEstimee - 100 / m.probabilite) < 0.02);
   }
   // Le meilleur pari (le plus probable) en premier.
@@ -26,20 +43,34 @@ test("Top 3 : trois matchs différents, dans la fenêtre, au format attendu par 
   assert.deepEqual(ps, [...ps].sort((a, b) => b - a));
 });
 
-test("Top 3 : cote totale cohérente avec les cotes de chaque sélection et honnête sur l'objectif", async () => {
+test("Top 3 : cote totale cohérente avec les cotes de chaque sélection, sans objectif de cote", async () => {
   const r = await buildWorld().coupons.topMatches();
   const product = r.topMatches.reduce((acc, m) => acc * (100 / m.probabilite), 1);
   assert.ok(Math.abs(Number(r.coteTotale) - product) < 0.05, `${r.coteTotale} vs ${product}`);
-  assert.equal(r.objectifCoteAtteint, Number(r.coteTotale) >= r.objectifCote);
+  assert.equal(r.objectifCote, undefined, "plus d'objectif de cote");
+  assert.equal(r.objectifCoteAtteint, undefined);
   const joint = r.topMatches.reduce((acc, m) => acc * (m.probabilite / 100), 1);
   assert.ok(Math.abs(r.probabiliteCombinee - joint * 100) < 0.2);
   assert.match(r.avertissement, /sans marge de bookmaker/);
 });
 
-test("Top 3 : l'objectif de cote est atteint quand c'est possible, en gardant la probabilité la plus haute", async () => {
-  const r = await buildWorld({ aiBehaviour: "off" }).coupons.topMatches();
-  assert.equal(r.objectifCoteAtteint, true);
-  assert.ok(Number(r.coteTotale) >= 2.5 && Number(r.coteTotale) < 3.2, `cote ${r.coteTotale}`);
+test("Top 3 : les trois paris les plus fiables de tous les matchs à venir, quelle que soit la cote", async () => {
+  const w = buildWorld({ aiBehaviour: "off" });
+  const r = await w.coupons.topMatches();
+  const oracle = await oracleTop(w);
+  assert.ok(oracle.length >= 12, `${oracle.length} matchs candidats`);
+  const expected = oracle.slice(0, 3);
+  assert.deepEqual(new Set(r.topMatches.map((m) => m.id)), new Set(expected.map((o) => o.id)));
+  for (const m of r.topMatches) {
+    const o = oracle.find((x) => x.id === m.id);
+    assert.equal(m.meilleurPari, o.label, `le pari le plus probable de ${m.homeTeam} – ${m.awayTeam}`);
+    assert.ok(Math.abs(m.probabilite - o.p * 100) < 0.1, `${m.probabilite} contre ${o.p * 100}`);
+  }
+  // Plus de limite : au moins un pari dépasse l'ancien plafond de 88 %, et la cote totale est bien en dessous de l'ancien objectif de 2,5.
+  assert.ok(r.topMatches.some((m) => m.probabilite > 88), JSON.stringify(r.topMatches.map((m) => m.probabilite)));
+  assert.ok(Number(r.coteTotale) < 2.5, `cote ${r.coteTotale}`);
+  // Aucun pari à ligne entière (remboursable) dans les sélections automatiques.
+  assert.ok(r.topMatches.every((m) => !/ (plus|moins) de \d (buts?)$/.test(m.meilleurPari)), r.topMatches.map((m) => m.meilleurPari).join(" | "));
 });
 
 test("Top 3 : le résultat est gardé en mémoire puis recalculé après 15 minutes", async () => {
@@ -126,7 +157,7 @@ test("Top 3 : si le recalcul échoue, la dernière sélection encore valable est
   await assert.rejects(w.coupons.topMatches(), /panne soudaine/);
 });
 
-test("coupon automatique : le pari le plus probable par match, totaux cohérents", async () => {
+test("coupon automatique : le pari le plus fiable de chaque match, sans plage de probabilité, totaux cohérents", async () => {
   const w = buildWorld({ aiBehaviour: "off" });
   const r = await w.coupons.autoCoupon([
     { equipe1: "Arsenal", equipe2: "Chelsea" },
@@ -138,9 +169,15 @@ test("coupon automatique : le pari le plus probable par match, totaux cohérents
   assert.equal(r.resultats[0].etat, "ok");
   assert.equal(r.resultats[2].etat, "equipe_inconnue");
   assert.equal(r.analyses, 2);
-  for (const x of r.resultats.slice(0, 2)) {
-    assert.ok(x.probabilite >= 55 && x.probabilite <= 88, `p = ${x.probabilite}`);
-    assert.ok(x.typePari);
+  for (const [i, pair] of [["Arsenal", "Chelsea"], ["Real Madrid", "Barcelona"]].entries()) {
+    const x = r.resultats[i];
+    const { core } = await w.analysis.prepare(w.analysis.resolveTeams(...pair));
+    let best = null;
+    for (const c of core.probs) if (!c.refund && (!best || c.p > best.p + 1e-9)) best = c;
+    assert.equal(x.typePari, best.label, `le pari le plus probable de ${pair.join(" – ")}`);
+    assert.ok(Math.abs(x.probabilite - best.p * 100) < 0.1, `p = ${x.probabilite} contre ${best.p * 100}`);
+    assert.ok(x.probabilite > 80 && x.probabilite <= 99, `p = ${x.probabilite}`);
+    assert.equal(x.probabiliteRemboursement, undefined, "pas de pari remboursable en sélection automatique");
   }
   const joint = (r.resultats[0].probabilite / 100) * (r.resultats[1].probabilite / 100);
   assert.ok(Math.abs(r.probabiliteCombinee - joint * 100) < 0.2);

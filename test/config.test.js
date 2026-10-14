@@ -53,3 +53,13 @@ test("EUROPE_HALF_LIFE_DAYS : borné entre 60 et 1500 jours, valeur illisible ig
   assert.equal(loadConfig({ EUROPE_HALF_LIFE_DAYS: "abc" }).europe.halfLifeDays, 365);
   assert.equal(loadConfig({ EUROPE_HALF_LIFE_DAYS: "" }).europe.halfLifeDays, 365);
 });
+
+test("Top Matchs : plus d'objectif de cote ni de plage de probabilité (l'ancienne variable TOP_TARGET_ODDS est ignorée)", () => {
+  const { top } = loadConfig({ TOP_TARGET_ODDS: "3.5" });
+  assert.equal(top.targetOdds, undefined);
+  assert.equal(top.minLegP, undefined);
+  assert.equal(top.maxLegP, undefined);
+  assert.equal(top.count, 3);
+  assert.equal(top.windowHours, 72);
+  assert.equal(top.maxWindowHours, 168);
+});
