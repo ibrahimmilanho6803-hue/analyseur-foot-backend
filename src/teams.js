@@ -172,6 +172,33 @@ function findTeam(query, teams, { leagueKey } = {}) {
 
 const coreOf = (s) => info(s).core;
 
+// Index des clubs par écriture : forme comparable complète et forme sans mots sans importance (« FC », « AC »…). Sert à reconnaître
+// qu'un club connu sous deux identifiants (l'un dans un championnat, l'autre dans une coupe) est un seul et même club.
+// `lookup(nom)` renvoie les clubs dont une écriture est identique à `nom` à ces mots près (jamais une simple ressemblance).
+function indexTeams(teams) {
+  const map = new Map();
+  const put = (key, team) => {
+    if (!key) return;
+    const set = map.get(key) || new Set();
+    set.add(team);
+    map.set(key, set);
+  };
+  for (const t of teams) {
+    for (const n of namesOf(t)) {
+      put(n.c, t);
+      put(n.core, t);
+    }
+  }
+  return {
+    lookup(name) {
+      const i = info(name);
+      const found = new Set();
+      for (const key of new Set([i.c, i.core])) for (const t of map.get(key) || []) found.add(t);
+      return [...found];
+    },
+  };
+}
+
 // Écritures d'un club à montrer ou à chercher côté site (« PSG », « Man City »…), sans son nom officiel et sans doublon.
 // Mêmes sources que namesOf : nom court, noms alternatifs de la source de données, écritures du groupe du club.
 function spellingsOf(team, max = 16) {
@@ -198,4 +225,4 @@ function spellingsOf(team, max = 16) {
   return out.slice(0, max);
 }
 
-module.exports = { findTeam, scoreName, canon, coreOf, spellingsOf };
+module.exports = { findTeam, scoreName, canon, coreOf, spellingsOf, indexTeams };

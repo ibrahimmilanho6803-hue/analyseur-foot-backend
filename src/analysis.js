@@ -4,7 +4,8 @@ const { clamp, round } = require("./util");
 const { SwrCache } = require("./cache");
 const { findTeam } = require("./teams");
 const { expectedGoals, scoreMatrix, dataQuality } = require("./model");
-const { MARKETS, resolveMarket, evaluate, evaluateAll } = require("./markets");
+const { MARKETS, resolveMarket, evaluate, describeMatrix } = require("./markets");
+const { OTHER_KEY } = require("./leagues");
 const { matchStats } = require("./stats");
 const { thinLegs, selectCoupon, bestForFixture } = require("./picks");
 
@@ -14,7 +15,10 @@ const dec = (x) => String(round(x, 1)).replace(".", ",");
 const pct1 = (p) => round(p * 100, 1);
 
 // Assemble les données, le modèle statistique et l'IA pour répondre aux routes.
-function createAnalysis({ config, data, ai, now = Date.now, log = console }) {
+// `europe` (facultatif) : comparaison entre clubs de championnats différents et coupes d'Europe (europe.js). Sans lui, ou coupé par
+// EUROPE_ENABLED=off, seuls des clubs d'un même championnat se comparent (les autres reçoivent l'état « ligues_differentes »).
+function createAnalysis({ config, data, ai, europe = null, now = Date.now, log = console }) {
+  const crossOn = Boolean(europe && europe.enabled);
   const aiCache = new SwrCache({ max: 600, now });
   // Correction mesurée sur les matchs récents : si les paris choisis automatiquement se réalisent moins souvent
   // que prévu, leurs probabilités sont abaissées d'autant (jamais relevées). Voir tuning.js.
@@ -29,17 +33,7 @@ function createAnalysis({ config, data, ai, now = Date.now, log = console }) {
     const { lh, la } = expectedGoals(leagueData.fit, homeId, awayId);
     const matrix = scoreMatrix(lh, la, { rho: config.model.rho, maxGoals: config.model.maxGoals });
     const quality = dataQuality(leagueData.fit, homeId, awayId);
-    const probs = evaluateAll(matrix);
-    const get = (label) => (probs.find((x) => x.label === label) || { p: 0 }).p;
-    const outcomes = {
-      home: get("Victoire domicile"),
-      draw: get("Match nul"),
-      away: get("Victoire extérieur"),
-      over25: get("Plus de 2.5 buts"),
-      btts: get("Les deux équipes marquent"),
-    };
-    const exact = evaluate(matrix, resolveMarket("Score exact"));
-    return { lh, la, matrix, quality, probs, outcomes, likelyScore: exact.detail, likelyScoreP: exact.p };
+    return { lh, la, matrix, quality, ...describeMatrix(matrix) };
   }
 
   const dataLabel = (q) => (q.level >= 2 ? "bonne" : q.level === 1 ? "moyenne" : "faible");
@@ -56,6 +50,16 @@ function createAnalysis({ config, data, ai, now = Date.now, log = console }) {
     const f2 = stats.statsEquipe2 && stats.statsEquipe2.forme;
     if (f1 && f2) parts.push(`Forme récente (du plus récent au plus ancien) : ${home} ${f1}, ${away} ${f2}.`);
     if (core.quality.level === 0) parts.push("Attention : peu de matchs récents pour au moins une des deux équipes, l'estimation est moins fiable.");
+    if (core.cross) {
+      const alone = [core.cross.sansChampionnat1 && home, core.cross.sansChampionnat2 && away].filter(Boolean);
+      parts.push(
+        alone.length === 0
+          ? `${home} et ${away} ne jouent pas dans le même championnat : le niveau des deux championnats est comparé grâce aux coupes d'Europe, ce qui rend l'estimation moins précise.`
+          : alone.length === 1
+            ? `${alone[0]} ne joue dans aucun championnat suivi : son niveau est déduit de ses seuls matchs de coupes d'Europe, l'estimation est peu précise.`
+            : `${home} et ${away} ne jouent dans aucun championnat suivi : leur niveau est déduit de leurs seuls matchs de coupes d'Europe, l'estimation est peu précise.`
+      );
+    }
     return parts.join(" ");
   }
 
@@ -93,9 +97,14 @@ function createAnalysis({ config, data, ai, now = Date.now, log = console }) {
   }
 
   // ---------- Reconnaissance des équipes ----------
+  // On attend les championnats principaux et les coupes d'Europe (pas les championnats complémentaires, qui se chargent ensuite
+  // en arrière-plan : une demande ne doit jamais patienter pour eux).
   async function loadAll(budgetMs = 10000) {
-    return data.ensureAll({ budgetMs });
+    return data.ensureAll({ budgetMs, scope: "essential" });
   }
+
+  // Championnats en panne cités dans le message : les 6 premiers, puis le nombre des autres.
+  const MAX_NAMED = 6;
 
   function resolveTeams(q1, q2) {
     const teams = data.allTeams();
@@ -104,26 +113,48 @@ function createAnalysis({ config, data, ai, now = Date.now, log = console }) {
     if (!teams.length) return { state: data.allFailed() ? "donnees_indisponibles" : "chargement" };
     let a = findTeam(q1, teams);
     let b = findTeam(q2, teams);
-    if (a.team && !b.team) b = findTeam(q2, teams, { leagueKey: a.team.leagueKey });
-    if (b.team && !a.team) a = findTeam(q1, teams, { leagueKey: b.team.leagueKey });
+    // Un club trouvé aide à départager l'autre dans son propre championnat (deux clubs du même championnat : le cas le plus courant).
+    // Sans comparaison entre championnats, la recherche reste limitée à ce championnat ; avec elle, on garde le résultat sur
+    // l'ensemble des clubs quand le championnat du premier n'a rien donné.
+    if (a.team && !b.team) {
+      const retry = findTeam(q2, teams, { leagueKey: a.team.leagueKey });
+      if (!crossOn || retry.team) b = retry;
+    }
+    if (b.team && !a.team) {
+      const retry = findTeam(q1, teams, { leagueKey: b.team.leagueKey });
+      if (!crossOn || retry.team) a = retry;
+    }
     const found1 = Boolean(a.team);
     const found2 = Boolean(b.team);
     if (!found1 || !found2) {
-      // Les deux clubs sont introuvables alors que des championnats ne sont pas encore chargés (démarrage du serveur) : ils sont
-      // peut-être dans l'un d'eux. Dire « équipe introuvable » serait faux ; il suffit de réessayer dans un instant.
-      // Si un des clubs est trouvé, la recherche du second se limite à son championnat, déjà chargé : la réponse est définitive.
-      const unloaded = !found1 && !found2 ? data.unloadedLeagues() : [];
+      // Un club est introuvable alors que des championnats ne sont pas encore chargés (démarrage du serveur) : il est peut-être dans
+      // l'un d'eux. Dire « équipe introuvable » serait faux ; il suffit de réessayer dans un instant.
+      // Sans comparaison entre championnats, un club trouvé limite la recherche du second à son championnat, déjà chargé : la réponse
+      // est alors définitive. Avec elle, le second peut jouer n'importe où.
+      const unloaded = crossOn || (!found1 && !found2) ? data.unloadedLeagues() : [];
       if (unloaded.some((l) => l.etat === "chargement")) return { state: "chargement", found1, found2 };
       const suggestions = {};
       if (!found1) suggestions.equipe1 = a.alternatives || [];
       if (!found2) suggestions.equipe2 = b.alternatives || [];
       const ambiguous = (!found1 && a.ambiguous) || (!found2 && b.ambiguous);
       // Des championnats en panne : on le dit, car le club cherché est peut-être dans l'un d'eux.
-      return { state: ambiguous ? "ambigu" : "equipe_inconnue", found1, found2, suggestions, indisponibles: unloaded.map((l) => l.nom) };
+      return {
+        state: ambiguous ? "ambigu" : "equipe_inconnue",
+        found1,
+        found2,
+        suggestions,
+        indisponibles: unloaded.slice(0, MAX_NAMED).map((l) => l.nom),
+        indisponiblesAutres: Math.max(0, unloaded.length - MAX_NAMED),
+      };
     }
     if (a.team.id === b.team.id) return { state: "meme_equipe", found1, found2 };
-    if (a.team.leagueKey !== b.team.leagueKey) return { state: "ligues_differentes", found1, found2, home: a.team, away: b.team };
-    return { state: "ok", found1, found2, home: a.team, away: b.team, leagueKey: a.team.leagueKey };
+    // Deux clubs du même championnat : modèle du championnat, comme avant. Les clubs « sans championnat suivi » (connus par les coupes
+    // d'Europe seulement) ne forment pas un championnat.
+    if (a.team.leagueKey === b.team.leagueKey && a.team.leagueKey !== OTHER_KEY) {
+      return { state: "ok", found1, found2, home: a.team, away: b.team, leagueKey: a.team.leagueKey, cross: false };
+    }
+    if (!crossOn) return { state: "ligues_differentes", found1, found2, home: a.team, away: b.team };
+    return { state: "ok", found1, found2, home: a.team, away: b.team, leagueKey: null, cross: true };
   }
 
   const MESSAGES = {
@@ -153,8 +184,52 @@ function createAnalysis({ config, data, ai, now = Date.now, log = console }) {
       equipesTrouvees2: Boolean(r.found2),
       suggestions: r.suggestions,
       ...(r.state === "ligues_differentes" ? { equipe1: r.home.name, equipe2: r.away.name } : {}),
-      ...(r.indisponibles && r.indisponibles.length ? { message: `${MESSAGES[r.state]} Données momentanément indisponibles pour : ${r.indisponibles.join(", ")}.` } : {}),
+      ...(r.indisponibles && r.indisponibles.length
+        ? { message: `${MESSAGES[r.state]} Données momentanément indisponibles pour : ${r.indisponibles.join(", ")}${r.indisponiblesAutres ? ` et ${r.indisponiblesAutres} autre(s)` : ""}.` }
+        : {}),
     });
+
+  // Ce qu'il faut savoir sur la comparaison entre deux championnats, pour l'écran (et pour l'IA, voir ai.js).
+  const crossPublic = (cross) => {
+    const alone = [cross.sansChampionnat1, cross.sansChampionnat2].filter(Boolean).length;
+    return {
+      championnat1: cross.championnat1,
+      championnat2: cross.championnat2,
+      niveauDesChampionnatsMesure: cross.etalonne,
+      message:
+        alone === 2
+          ? "Aucun de ces clubs ne joue dans un championnat suivi par l'application : leur niveau n'est estimé que d'après leurs matchs de coupes d'Europe. Estimation peu précise."
+          : alone === 1
+            ? "L'un de ces clubs ne joue dans aucun championnat suivi par l'application : son niveau n'est estimé que d'après ses matchs de coupes d'Europe. Estimation peu précise."
+            : cross.etalonne
+              ? "Ces deux clubs ne jouent pas dans le même championnat : leur niveau relatif est estimé grâce aux matchs de coupes d'Europe. Estimation moins précise qu'entre deux clubs d'un même championnat."
+              : "Ces deux clubs ne jouent pas dans le même championnat, et le niveau relatif de leurs championnats ne repose que sur une estimation générale (peu de matchs de coupes d'Europe) : estimation peu précise.",
+    };
+  };
+
+  // Tout ce qui sert à analyser un match une fois les deux clubs reconnus : calcul du modèle, matchs pour les statistiques, match à venir
+  // éventuel et nom de la compétition. Deux cas : deux clubs du même championnat (modèle du championnat) ou de championnats différents.
+  async function prepare(r) {
+    if (!r.cross) {
+      const leagueData = await data.getLeagueData(r.leagueKey);
+      return {
+        core: computeCore(leagueData, r.home.id, r.away.id),
+        finished: leagueData.finished,
+        fixture: leagueData.fixtures.find((f) => f.home.id === r.home.id && f.away.id === r.away.id) || null,
+        competition: leagueData.league.name,
+      };
+    }
+    // Les championnats des deux clubs sont déjà en mémoire (les clubs viennent de là) : on s'assure juste de leur fraîcheur.
+    await Promise.all([r.home.leagueKey, r.away.leagueKey].filter((k, i, all) => k !== OTHER_KEY && all.indexOf(k) === i).map((k) => data.getLeagueData(k)));
+    const core = europe.core(r.home, r.away);
+    const fixture = europe.findFixture(r.home.id, r.away.id);
+    return {
+      core,
+      finished: europe.relevantFinished(r.home, r.away),
+      fixture,
+      competition: fixture ? fixture.cup.name : r.home.leagueKey === OTHER_KEY && r.away.leagueKey === OTHER_KEY ? "Match entre clubs européens" : "Match entre clubs de championnats différents",
+    };
+  }
 
   // ---------- Analyse d'une sélection (équipe 1 à domicile contre équipe 2) ----------
   async function analyzeLeg({ equipe1, equipe2, typePari }, { withAi = true, aiTimeoutMs = 25000, shift = 0 } = {}) {
@@ -172,10 +247,9 @@ function createAnalysis({ config, data, ai, now = Date.now, log = console }) {
       });
     }
 
-    const leagueData = await data.getLeagueData(r.leagueKey);
-    const core = computeCore(leagueData, r.home.id, r.away.id);
-    const stats = matchStats(leagueData.finished, r.home.id, r.away.id);
-    const fixture = leagueData.fixtures.find((f) => f.home.id === r.home.id && f.away.id === r.away.id) || null;
+    const prep = await prepare(r);
+    const { core, fixture } = prep;
+    const stats = matchStats(prep.finished, r.home.id, r.away.id);
     const ev = evaluate(core.matrix, market);
     const pModel = ev.p;
     const exact = Boolean(market.exact);
@@ -188,7 +262,7 @@ function createAnalysis({ config, data, ai, now = Date.now, log = console }) {
       const ctx = {
         home: r.home.name,
         away: r.away.name,
-        competition: leagueData.league.name,
+        competition: prep.competition,
         kickoff: fixture ? fixture.kickoff : null,
         bet,
         lh: core.lh,
@@ -196,6 +270,7 @@ function createAnalysis({ config, data, ai, now = Date.now, log = console }) {
         outcomes: core.outcomes,
         quality: core.quality,
         stats,
+        ...(core.cross ? { cross: core.cross } : {}),
       };
       const key = `leg:${r.home.id}:${r.away.id}:${market.label}:${Math.round(pCal * 100)}:${fixture ? fixture.id : "-"}`;
       const res = await reviewWithAi(ctx, { key, timeoutMs: aiTimeoutMs });
@@ -216,7 +291,7 @@ function createAnalysis({ config, data, ai, now = Date.now, log = console }) {
       etat: "ok",
       equipe1: r.home.name,
       equipe2: r.away.name,
-      competition: leagueData.league.name,
+      competition: prep.competition,
       date: fixture ? new Date(fixture.kickoff).toISOString() : null,
       typePari: market.label,
       probabilite: pct1(fin.p),
@@ -230,6 +305,7 @@ function createAnalysis({ config, data, ai, now = Date.now, log = console }) {
       butsAttendus: { equipe1: round(core.lh, 2), equipe2: round(core.la, 2) },
       scoreProbable: core.likelyScore,
       fiabiliteDonnees: { niveau: dataLabel(core.quality), matchsEquipe1: core.quality.nHome, matchsEquipe2: core.quality.nAway },
+      ...(core.cross ? { comparaisonEntreChampionnats: crossPublic(core.cross) } : {}),
       donneesInsuffisantes: false,
       equipesTrouvees1: true,
       equipesTrouvees2: true,
@@ -250,7 +326,7 @@ function createAnalysis({ config, data, ai, now = Date.now, log = console }) {
     );
   }
 
-  return { analyzeLeg, analyzeLegs, loadAll, computeCore, resolveTeams, reviewWithAi, aiPublic, finalProbability, confidence, modelJustification, calibration, setPickShift, helpers: { pct1, dec, unresolved, unresolvedFrom } };
+  return { analyzeLeg, analyzeLegs, loadAll, computeCore, prepare, resolveTeams, reviewWithAi, aiPublic, finalProbability, confidence, modelJustification, calibration, setPickShift, helpers: { pct1, dec, unresolved, unresolvedFrom, crossPublic } };
 }
 
 module.exports = { createAnalysis, WARNING_ODDS };

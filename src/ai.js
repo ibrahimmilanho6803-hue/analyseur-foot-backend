@@ -46,6 +46,17 @@ function buildPrompt(ctx) {
   const { home, away, competition, kickoff, bet, lh, la, outcomes, quality, stats = {} } = ctx;
   const rows = [];
   rows.push(`Match : ${home} (domicile) contre ${away} (extérieur) — ${competition || "championnat"}${kickoff ? ` — ${new Date(kickoff).toISOString().slice(0, 10)}` : ""}`);
+  if (ctx.cross) {
+    const c = ctx.cross;
+    const alone = [c.sansChampionnat1 && home, c.sansChampionnat2 && away].filter(Boolean);
+    rows.push(
+      alone.length
+        ? alone.length > 1
+          ? `Attention : ${home} et ${away} ne jouent dans aucun des championnats suivis. Leur niveau n'est déduit que de leurs matchs de coupes d'Europe : estimation peu précise, tiens-en compte pour ta confiance.`
+          : `Attention : ${alone[0]} ne joue dans aucun des championnats suivis. Son niveau n'est déduit que de ses matchs de coupes d'Europe : estimation peu précise, tiens-en compte pour ta confiance.`
+        : `Attention : ${home} (${c.championnat1}) et ${away} (${c.championnat2}) ne jouent pas dans le même championnat. Le modèle compare le niveau des deux championnats grâce aux matchs de coupes d'Europe${c.etalonne ? "" : " (niveau relatif de ces championnats peu mesuré)"} : cette comparaison est moins précise que dans un même championnat, tiens-en compte pour ta confiance.`
+    );
+  }
   rows.push(`Pari étudié : ${bet.label}`);
   rows.push(`Probabilité du modèle : ${pct(bet.p)} (cote équitable ${round(1 / bet.p, 2)})`);
   rows.push(`Buts attendus : ${home} ${round(lh, 2)} — ${away} ${round(la, 2)}`);

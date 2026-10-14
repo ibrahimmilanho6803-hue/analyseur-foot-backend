@@ -97,6 +97,27 @@ test("un seul réglage à la fois, et une panne de données ne casse rien", asyn
   assert.equal(w.analysis.calibration.pickShift, 0);
 });
 
+test("réglage automatique : un changement de réglage recharge aussi les coupes et les championnats complémentaires", async () => {
+  const w = buildWorld({ keys: ["PL", "PD", "SA", "ELC"], cups: true, aiBehaviour: "off" });
+  w.config.model.tuneGrid = { halfLifeDays: [300], priorMatches: [10] };
+  await w.data.ensureAll({ budgetMs: 5000, scope: "all" });
+  assert.ok(w.data.peekLeague("UCL") && w.data.peekLeague("ELC"), "tout est chargé avant le réglage");
+  // Un coefficient de niveau en service différent de celui que le réglage va mesurer : le réglage changera donc les paramètres du modèle,
+  // ce qui efface tous les championnats en mémoire.
+  w.data.setModelParams({ levelFactor: 1.05 });
+  assert.equal(w.data.peekLeague("UCL"), null, "l'effacement a bien lieu");
+  await w.data.ensureAll({ budgetMs: 5000, scope: "all" });
+  const tuner = createTuner({ config: w.config, data: w.data, analysis: w.analysis, now: () => w.clock.t, log: quiet });
+  await tuner.run();
+  assert.notEqual(w.data.getModelParams().levelFactor, 1.05, "le réglage a bien changé le coefficient (sinon ce test ne prouve rien)");
+  // Les championnats complémentaires sont rechargés en arrière-plan : on leur laisse le temps de finir.
+  for (let i = 0; i < 400 && !(w.data.peekLeague("ELC") && w.data.peekLeague("UCL")); i++) await new Promise((r) => setImmediate(r));
+  assert.ok(w.data.peekLeague("UCL"), "la coupe est rechargée");
+  assert.ok(w.data.peekLeague("ELC"), "le championnat complémentaire est rechargé");
+  const [r] = await w.analysis.analyzeLegs([{ equipe1: "Leeds United", equipe2: "Norwich City", typePari: "Victoire domicile" }], { withAi: false });
+  assert.equal(r.etat, "ok", "un match d'un championnat complémentaire reste analysable juste après le réglage");
+});
+
 // ---- Niveau de buts ----
 
 const report = (matchs, prevus, reels, ecartTypeReels = 1.65) => ({ matchsEvalues: matchs, butsParMatch: { prevus, reels, ecartTypeReels } });

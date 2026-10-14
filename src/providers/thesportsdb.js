@@ -8,6 +8,8 @@ const GAP_MS = 2100;
 // Au-delà de la limite de l'offre (30 requêtes par minute en gratuit, 100 en Premium), le service répond 429 et refuse tout
 // pendant environ une minute : on le laisse tranquille un peu plus longtemps que cela.
 const COOL_MS = 61000;
+// Clés publiques de test : leurs réponses sont tronquées (15 matchs par saison pour un championnat, encore moins pour une coupe).
+const FREE_KEYS = new Set(["1", "2", "3", "123"]);
 
 function parseKickoff(e) {
   const ts = e.strTimestamp;
@@ -89,7 +91,10 @@ function createTheSportsDb({ http, key, now = Date.now, gapMs = GAP_MS }) {
         if (!events.length) continue;
         const nowMs = now();
         const matches = events.map((e) => normalize(e, nowMs)).filter(Boolean);
-        const limited = events.length === 15 || events.length === 100 || events.length < 60;
+        // Une saison de championnat compte au moins 60 matchs. Une coupe d'Europe en compte parfois moins (début de saison, tours
+        // préliminaires) : pour elle, seuls les nombres de la troncature (15, 100) et la clé publique de test font soupçonner des données partielles.
+        const cup = league.kind === "cup";
+        const limited = events.length === 15 || events.length === 100 || (!cup && events.length < 60) || (cup && FREE_KEYS.has(String(key)));
         return { matches, limited, rawCount: events.length };
       }
       return { matches: [], limited: false, rawCount: 0 };

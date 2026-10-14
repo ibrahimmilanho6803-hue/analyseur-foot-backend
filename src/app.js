@@ -6,7 +6,7 @@ const { clamp } = require("./util");
 const { createLimiter } = require("./ratelimit");
 const { runBacktestAsync } = require("./backtest");
 const { SwrCache } = require("./cache");
-const { LEAGUES } = require("./leagues");
+const { isCup, OTHER, OTHER_KEY } = require("./leagues");
 const { spellingsOf } = require("./teams");
 const { version: VERSION } = require("../package.json");
 
@@ -27,7 +27,7 @@ function readLeg(raw) {
   return { equipe1, equipe2, typePari: cleanText(raw.typePari, 80) };
 }
 
-function createApp({ config, data, ai, analysis, coupons, tuner = null, now = Date.now, log = console }) {
+function createApp({ config, data, ai, analysis, coupons, europe = null, tuner = null, now = Date.now, log = console }) {
   const app = express();
   app.set("trust proxy", 1);
   app.disable("x-powered-by");
@@ -69,22 +69,39 @@ function createApp({ config, data, ai, analysis, coupons, tuner = null, now = Da
   // ---- Informations ----
   app.get("/", (req, res) => res.json({ service: "Analyseur Foot Pro — API", version: VERSION, etat: "/api/status" }));
 
+  // type : « championnat » ou « coupe » (Ligue des champions…) ; niveau : « principal » ou « complementaire » (chargé ensuite, sert aux
+  // matchs saisis à la main mais pas au « Top Matchs »).
   app.get("/api/leagues", (req, res) => {
     const covered = new Set(data.leagues.map((l) => l.key));
-    res.json({ championnats: LEAGUES.map((l) => ({ key: l.key, nom: l.name, pays: l.country, couvert: covered.has(l.key) })) });
+    res.json({
+      championnats: data.listed.map((l) => ({
+        key: l.key,
+        nom: l.name,
+        pays: l.country,
+        type: isCup(l) ? "coupe" : "championnat",
+        niveau: l.tier === "core" ? "principal" : "complementaire",
+        couvert: covered.has(l.key),
+      })),
+    });
   });
 
   // Clubs connus et leurs écritures courantes (« PSG », « Man City »…) : sert aux suggestions pendant la saisie sur le site.
   // « complet » reste faux tant qu'un championnat n'est pas chargé : le site ne garde alors cette liste que quelques minutes.
+  // Les clubs connus seulement par une coupe d'Europe (aucun championnat suivi) sont rangés sous la clé « EUR ».
+  // « complet » : tous les championnats principaux et coupes sont chargés et aucun championnat complémentaire ne l'est encore en cours
+  // (un complémentaire en échec ne bloque pas : il serait sinon redemandé sans fin).
   app.get("/api/teams", (req, res) => {
     const teams = data.allTeams();
-    const loaded = new Set(teams.map((t) => t.leagueKey));
     const equipes = teams.map((t) => ({ nom: t.name, championnat: t.leagueKey, noms: spellingsOf(t) })).sort((a, b) => a.nom.localeCompare(b.nom, "fr"));
+    const championnats = data.leagues
+      .filter((l) => !isCup(l))
+      .map((l) => ({ key: l.key, nom: l.name, pays: l.country, niveau: l.tier === "core" ? "principal" : "complementaire", charge: data.peekLeague(l.key) !== null }));
+    if (teams.some((t) => t.leagueKey === OTHER_KEY)) championnats.push({ key: OTHER_KEY, nom: OTHER.name, pays: OTHER.country, niveau: "complementaire", charge: true });
     res.set("Cache-Control", "public, max-age=300");
     res.json({
       genereLe: new Date(now()).toISOString(),
-      complet: data.leagues.every((l) => loaded.has(l.key)),
-      championnats: data.leagues.map((l) => ({ key: l.key, nom: l.name, pays: l.country, charge: loaded.has(l.key) })),
+      complet: !data.unloadedLeagues().some((l) => l.lot === "core" || l.etat === "chargement"),
+      championnats,
       equipes,
     });
   });
@@ -96,17 +113,23 @@ function createApp({ config, data, ai, analysis, coupons, tuner = null, now = Da
     const donnees = data.status();
     // « avertissements vide » doit vouloir dire « tout est chargé et à jour » : on signale donc aussi ce qui n'a jamais pu
     // se charger (avec la raison, regroupée par message) et ce qui est encore en cours de chargement.
-    const echecs = new Map();
-    let enChargement = 0;
+    // Les championnats complémentaires se chargent après les autres et peuvent manquer sans gravité : leurs problèmes vont dans
+    // « remarques », pas dans « avertissements » (que la surveillance traite comme une panne).
+    const echecs = { principal: new Map(), complementaire: new Map() };
+    const enChargement = { principal: 0, complementaire: 0 };
+    const remarques = [];
     for (const c of donnees.championnats) {
       if (!c.couvert) continue;
-      if (c.alertes.length) avertissements.push(`${c.nom} : ${c.alertes[0]}`);
-      if (c.etat === "echec") echecs.set(c.derniereErreur, [...(echecs.get(c.derniereErreur) || []), c.nom]);
-      else if (c.etat === "chargement") enChargement += 1;
-      else if (c.derniereErreur) avertissements.push(`${c.nom} : la dernière actualisation a échoué (${c.derniereErreur}), données vieilles de ${c.ageMinutes} min.`);
+      const notes = c.niveau === "principal" ? avertissements : remarques;
+      if (c.alertes.length) notes.push(`${c.nom} : ${c.alertes[0]}`);
+      if (c.etat === "echec") echecs[c.niveau].set(c.derniereErreur, [...(echecs[c.niveau].get(c.derniereErreur) || []), c.nom]);
+      else if (c.etat === "chargement") enChargement[c.niveau] += 1;
+      else if (c.derniereErreur) notes.push(`${c.nom} : la dernière actualisation a échoué (${c.derniereErreur}), données vieilles de ${c.ageMinutes} min.`);
     }
-    for (const [message, noms] of echecs) avertissements.push(`Chargement impossible (${noms.join(", ")}) : ${message}`);
-    if (enChargement) avertissements.push(`Chargement en cours : ${enChargement} championnat(s) pas encore prêt(s).`);
+    for (const [message, noms] of echecs.principal) avertissements.push(`Chargement impossible (${noms.join(", ")}) : ${message}`);
+    for (const [message, noms] of echecs.complementaire) remarques.push(`Chargement impossible (${noms.join(", ")}) : ${message}`);
+    if (enChargement.principal) avertissements.push(`Chargement en cours : ${enChargement.principal} championnat(s) pas encore prêt(s).`);
+    if (enChargement.complementaire) remarques.push(`Chargement en cours : ${enChargement.complementaire} championnat(s) complémentaire(s) pas encore prêt(s).`);
     const modelParams = data.getModelParams();
     res.json({
       service: "Analyseur Foot Pro — API",
@@ -121,7 +144,9 @@ function createApp({ config, data, ai, analysis, coupons, tuner = null, now = Da
         reglageAutomatique: tuner ? tuner.status() : null,
         correctionParisAutomatiques: analysis.calibration ? { decalagePoints: Math.round(analysis.calibration.pickShift * 1000) / 10, detail: analysis.calibration.info } : null,
       },
+      europe: europe ? europe.status() : { actif: false },
       avertissements,
+      remarques,
     });
   });
 
@@ -183,7 +208,9 @@ function createApp({ config, data, ai, analysis, coupons, tuner = null, now = Da
       const jours = clamp(parseInt(req.query.jours, 10) || 120, 30, 365);
       const pas = Math.round(optNum(req.query.pas, 3, 28) ?? 7);
       const wanted = typeof req.query.championnat === "string" ? req.query.championnat.toUpperCase().slice(0, 4) : "";
-      const keys = wanted ? data.leagues.filter((l) => l.key === wanted).map((l) => l.key) : data.leagues.map((l) => l.key);
+      // Sans précision : les 10 championnats principaux. Un championnat complémentaire peut être demandé par sa clé ; une coupe, non.
+      const domestic = data.leagues.filter((l) => !isCup(l));
+      const keys = wanted ? domestic.filter((l) => l.key === wanted).map((l) => l.key) : domestic.filter((l) => l.tier === "core").map((l) => l.key);
       if (!keys.length) return res.status(404).json({ error: "Championnat inconnu ou non couvert." });
       const essai = {};
       const put = (name, value) => {

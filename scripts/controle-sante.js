@@ -5,9 +5,11 @@
 //
 //   node scripts/controle-sante.js [adresse] [--sans-test] [--essais=3] [--attente=60]
 //
-// Vérifie que le serveur répond, que les données de tous les championnats sont chargées et récentes, que l'IA n'est ni en pause
-// ni bloquée (clé refusée, crédit épuisé, modèle introuvable) et que le budget quotidien d'appels n'est pas épuisé. Sauf avec
-// --sans-test, il fait aussi une vraie analyse de bout en bout (deux clubs, pari « Score exact » : aucun appel à l'IA, aucun coût).
+// Vérifie que le serveur répond, que les données des championnats principaux et des coupes d'Europe sont chargées et récentes, que
+// l'IA n'est ni en pause ni bloquée (clé refusée, crédit épuisé, modèle introuvable) et que le budget quotidien d'appels n'est pas
+// épuisé. Les championnats complémentaires (voir src/leagues.js) ne déclenchent jamais d'alerte : leurs problèmes sont seulement
+// signalés en remarque. Sauf avec --sans-test, il fait aussi de vraies analyses de bout en bout (deux clubs d'un même championnat, puis
+// deux clubs de championnats différents quand la comparaison entre championnats est active ; pari « Score exact » : aucun appel à l'IA, aucun coût).
 // Code de sortie : 0 = tout va bien, 1 = au moins un problème (affiché en clair). Lancé toutes les 6 heures par
 // .github/workflows/surveillance.yml ; GitHub prévient par e-mail quand une exécution échoue.
 
@@ -27,8 +29,9 @@ function evaluateStatus(st) {
   const notes = [];
   if (!st || typeof st !== "object" || Array.isArray(st)) return { problems: ["La réponse de /api/status est illisible."], notes };
 
-  // « avertissements » vide veut dire : tout est chargé, à jour, clés présentes (voir src/app.js).
+  // « avertissements » vide veut dire : tout l'essentiel est chargé, à jour, clés présentes (voir src/app.js).
   for (const w of Array.isArray(st.avertissements) ? st.avertissements : []) problems.push(`Avertissement du serveur : ${w}`);
+  for (const r of Array.isArray(st.remarques) ? st.remarques : []) notes.push(`Championnats complémentaires : ${r}`);
 
   const ia = st.ia && typeof st.ia === "object" ? st.ia : {};
   if (ia.active === false) problems.push("L'IA est inactive sur le serveur (clé absente ou AI_ENABLED=false) : seul le modèle statistique répond.");
@@ -50,6 +53,7 @@ function evaluateStatus(st) {
   if (!covered.length) problems.push("Aucun championnat suivi dans /api/status.");
   else if (!covered.some((c) => c.etat === "pret")) problems.push("Aucun championnat n'est chargé.");
   for (const c of covered) {
+    if (c.niveau === "complementaire") continue; // chargé en dernier, sans gravité s'il manque ou vieillit
     if (c.etat === "pret" && Number.isFinite(c.ageMinutes) && c.ageMinutes > MAX_DATA_AGE_MIN) {
       problems.push(`${c.nom} : données vieilles de ${Math.round(c.ageMinutes / 60)} h alors que le serveur les rafraîchit toutes les 25 minutes.`);
     }
@@ -68,21 +72,40 @@ async function getJson(fetchImpl, url, { timeoutMs = 45000, ...init } = {}) {
   return { status: res.status, json };
 }
 
-// Une analyse complète sans IA : deux clubs d'un même championnat chargé, pari « Score exact ».
-async function smokeTest(fetchImpl, base) {
+// Une analyse sans IA (pari « Score exact ») ; renvoie la réponse du serveur ou un problème lisible.
+async function tryAnalysis(fetchImpl, base, one, two, what) {
+  const r = await getJson(fetchImpl, `${base}/api/analyze`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ equipe1: one, equipe2: two, typePari: "Score exact", ia: false }),
+  });
+  if (r.status !== 200 || !r.json) return { problem: `${what} (${one} – ${two}) répond HTTP ${r.status}.` };
+  if (r.json.etat !== "ok" || !(r.json.probabilite > 0)) return { problem: `${what} (${one} – ${two}) n'a pas abouti : ${r.json.etat || "réponse vide"}.` };
+  return { json: r.json };
+}
+
+// Analyses complètes sans IA : deux clubs d'un même championnat chargé, puis (si `cross`) deux clubs de championnats différents.
+async function smokeTest(fetchImpl, base, { cross = false } = {}) {
   const teams = await getJson(fetchImpl, `${base}/api/teams`);
   if (teams.status !== 200 || !teams.json) return [`/api/teams répond HTTP ${teams.status}.`];
   const loaded = (teams.json.championnats || []).filter((c) => c.charge).map((c) => c.key);
+  const pairIn = (key) => (teams.json.equipes || []).filter((t) => t.championnat === key).slice(0, 2);
   for (const key of loaded) {
-    const pair = (teams.json.equipes || []).filter((t) => t.championnat === key).slice(0, 2);
+    const pair = pairIn(key);
     if (pair.length < 2) continue;
-    const r = await getJson(fetchImpl, `${base}/api/analyze`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ equipe1: pair[0].nom, equipe2: pair[1].nom, typePari: "Score exact", ia: false }),
-    });
-    if (r.status !== 200 || !r.json) return [`L'analyse d'essai (${pair[0].nom} – ${pair[1].nom}) répond HTTP ${r.status}.`];
-    if (r.json.etat !== "ok" || !(r.json.probabilite > 0)) return [`L'analyse d'essai (${pair[0].nom} – ${pair[1].nom}) n'a pas abouti : ${r.json.etat || "réponse vide"}.`];
+    const first = await tryAnalysis(fetchImpl, base, pair[0].nom, pair[1].nom, "L'analyse d'essai");
+    if (first.problem) return [first.problem];
+    if (!cross) return [];
+    // Comparaison entre championnats : un club de ce championnat contre un club d'un autre championnat chargé.
+    for (const other of loaded) {
+      if (other === key) continue;
+      const rival = pairIn(other)[0];
+      if (!rival) continue;
+      const second = await tryAnalysis(fetchImpl, base, pair[0].nom, rival.nom, "L'analyse d'essai entre deux championnats");
+      if (second.problem) return [second.problem];
+      if (!second.json.comparaisonEntreChampionnats) return [`L'analyse d'essai entre deux championnats (${pair[0].nom} – ${rival.nom}) ne signale pas la comparaison entre championnats.`];
+      return [];
+    }
     return [];
   }
   return ["Aucune paire de clubs trouvée dans /api/teams pour l'analyse d'essai."];
@@ -100,6 +123,7 @@ async function checkOnce({ base, fetchImpl, smoke }) {
   } catch (e) {
     return { problems: [`Le serveur ne répond pas (${e && e.name === "TimeoutError" ? "délai dépassé" : e && e.message ? e.message : "erreur réseau"}).`], notes };
   }
+  let cross = false;
   try {
     const status = await getJson(fetchImpl, `${base}/api/status`);
     if (status.status !== 200) problems.push(`/api/status répond HTTP ${status.status}.`);
@@ -107,13 +131,14 @@ async function checkOnce({ base, fetchImpl, smoke }) {
       const out = evaluateStatus(status.json);
       problems.push(...out.problems);
       notes = out.notes;
+      cross = Boolean(status.json && status.json.europe && status.json.europe.actif);
     }
   } catch (e) {
     problems.push(`/api/status est injoignable (${e && e.message ? e.message : "erreur réseau"}).`);
   }
   if (smoke) {
     try {
-      problems.push(...(await smokeTest(fetchImpl, base)));
+      problems.push(...(await smokeTest(fetchImpl, base, { cross })));
     } catch (e) {
       problems.push(`L'analyse d'essai a échoué (${e && e.message ? e.message : "erreur réseau"}).`);
     }

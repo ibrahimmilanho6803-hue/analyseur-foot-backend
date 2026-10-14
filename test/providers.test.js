@@ -54,6 +54,25 @@ test("football-data : à venir, reporté, sans score ou illisible", () => {
   assert.equal(normalizeFootballData(null), null);
 });
 
+test("football-data : après prolongation ou tirs au but, le score retenu est celui des 90 minutes (« fullTime » additionne tout)", () => {
+  const base = { utcDate: "2026-03-11T20:00:00Z", status: "FINISHED", homeTeam: team(1, "A"), awayTeam: team(2, "B") };
+  const pens = normalizeFootballData({
+    ...base,
+    id: 1,
+    score: { duration: "PENALTY_SHOOTOUT", fullTime: { home: 7, away: 6 }, regularTime: { home: 1, away: 1 }, extraTime: { home: 0, away: 0 }, penalties: { home: 6, away: 5 } },
+  });
+  assert.deepEqual([pens.status, pens.hg, pens.ag], ["finished", 1, 1]);
+  const extra = normalizeFootballData({ ...base, id: 2, score: { duration: "EXTRA_TIME", fullTime: { home: 4, away: 3 }, regularTime: { home: 3, away: 3 }, extraTime: { home: 1, away: 0 } } });
+  assert.deepEqual([extra.status, extra.hg, extra.ag], ["finished", 3, 3]);
+  // Sans « regularTime », le score total n'est pas celui des 90 minutes : mieux vaut ignorer le match que compter 7–6.
+  const unsure = normalizeFootballData({ ...base, id: 3, score: { duration: "PENALTY_SHOOTOUT", fullTime: { home: 7, away: 6 } } });
+  assert.equal(unsure.status, "other");
+  assert.equal(unsure.hg, null);
+  // Un match réglé en 90 minutes garde son score total.
+  const regular = normalizeFootballData({ ...base, id: 4, score: { duration: "REGULAR", fullTime: { home: 2, away: 0 }, regularTime: { home: 2, away: 0 } } });
+  assert.deepEqual([regular.status, regular.hg, regular.ag], ["finished", 2, 0]);
+});
+
 test("football-data : appel de la bonne adresse avec la clé en en-tête", async () => {
   const http = fakeHttp([
     {
@@ -248,4 +267,48 @@ test("splitAlternates : espaces, doublons, nom du club lui-même, extrêmes et v
   assert.deepEqual(splitAlternates(12345, "Lyon"), ["12345"]);
   const many = Array.from({ length: 30 }, (_, i) => `Nom ${i}`).join(",");
   assert.equal(splitAlternates(many, "Club").length, 12, "au plus 12 noms par club");
+});
+
+// ---- Coupes d'Europe et championnats complémentaires ----
+
+test("football-data : couvre la Ligue des champions et le Championship, pas les autres coupes ni les championnats hors offre", () => {
+  const fd = createFootballData({ http: fakeHttp([{}]), key: "k" });
+  assert.equal(fd.supports(byKey.get("UCL")), true);
+  assert.equal(fd.supports(byKey.get("ELC")), true);
+  assert.equal(fd.supports(byKey.get("UEL")), false);
+  assert.equal(fd.supports(byKey.get("UECL")), false);
+  assert.equal(fd.supports(byKey.get("TSL")), false);
+  assert.equal(createFootballData({ http: fakeHttp([{}]), key: "" }).supports(byKey.get("UCL")), false);
+});
+
+test("TheSportsDB : couvre les coupes d'Europe et les championnats complémentaires, adresse de la Ligue des champions", async () => {
+  const http = fakeHttp([{ events: null }]);
+  const tsdb = createTheSportsDb({ http, key: "KEY", now: () => NOW });
+  for (const k of ["UCL", "UEL", "UECL", "ELC", "TSL", "ARG", "NOR"]) assert.equal(tsdb.supports(byKey.get(k)), true, k);
+  await tsdb.fetchSeason(byKey.get("UCL"), 2026);
+  assert.equal(http.calls[0].url, "https://www.thesportsdb.com/api/v1/json/KEY/eventsseason.php?id=4480&s=2026-2027");
+});
+
+test("TheSportsDB : une coupe d'Europe peu fournie (début de saison) n'est pas jugée partielle avec une vraie clé, un championnat l'est", async () => {
+  const mk = (n) =>
+    Array.from({ length: n }, (_, i) => ({
+      idEvent: String(i),
+      strTimestamp: "2026-09-12T14:00:00",
+      idHomeTeam: String(1 + (i % 20)),
+      idAwayTeam: String(21 + (i % 20)),
+      strHomeTeam: "A",
+      strAwayTeam: "B",
+      intHomeScore: "1",
+      intAwayScore: "1",
+    }));
+  const season = (key, league, n) => createTheSportsDb({ http: fakeHttp([{ events: mk(n) }]), key, now: () => NOW }).fetchSeason(byKey.get(league), 2026);
+  assert.equal((await season("KEY", "UCL", 32)).limited, false, "32 matchs de coupe : normal en début de saison");
+  assert.equal((await season("KEY", "UCL", 189)).limited, false);
+  assert.equal((await season("KEY", "PL", 32)).limited, true, "un championnat compte au moins 60 matchs");
+  // les nombres de la troncature (15 ou 100 matchs) restent suspects pour une coupe aussi
+  assert.equal((await season("KEY", "UCL", 15)).limited, true);
+  assert.equal((await season("KEY", "UCL", 100)).limited, true);
+  // la clé publique de test donne des listes tronquées : toute coupe est jugée partielle
+  for (const free of ["1", "2", "3", "123"]) assert.equal((await season(free, "UCL", 32)).limited, true, `clé gratuite ${free}`);
+  assert.equal((await season("KEY", "TSL", 300)).limited, false, "championnat complémentaire complet");
 });

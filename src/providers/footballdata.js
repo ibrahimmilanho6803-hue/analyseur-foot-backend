@@ -6,13 +6,21 @@ const BASE = "https://api.football-data.org/v4";
 const GAP_MS = 6500;
 const COOL_MS = 62000; // limite de 10 requêtes par minute dépassée : le service refuse tout pendant environ une minute
 
+// Score au bout des 90 minutes, celui sur lequel le modèle et les paris portent. Après une prolongation ou des tirs au but, « fullTime »
+// additionne le temps réglementaire, la prolongation et les tirs au but (un 1–1 décidé aux tirs au but y figure à 7–6) : on prend alors
+// « regularTime ». Sans lui, le score n'est pas fiable : le match est ignoré plutôt que compté avec des buts en trop.
+function regularScore(score) {
+  const sc = score || {};
+  return sc.duration === "EXTRA_TIME" || sc.duration === "PENALTY_SHOOTOUT" ? sc.regularTime || {} : sc.fullTime || {};
+}
+
 function normalize(m) {
   const home = m && m.homeTeam;
   const away = m && m.awayTeam;
   if (!home || !away || home.id == null || away.id == null) return null;
   const kickoff = Date.parse(m.utcDate);
   if (!Number.isFinite(kickoff)) return null;
-  const ft = (m.score && m.score.fullTime) || {};
+  const ft = regularScore(m.score);
   const hasScore = Number.isFinite(ft.home) && Number.isFinite(ft.away);
   let status = "other";
   if (m.status === "FINISHED" && hasScore) status = "finished";
