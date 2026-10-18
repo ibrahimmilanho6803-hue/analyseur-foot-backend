@@ -13,7 +13,7 @@ const CTX = {
   away: "Chelsea FC",
   competition: "Premier League",
   kickoff: Date.UTC(2026, 9, 12, 14),
-  bet: { label: "Victoire ou nul domicile", p: 0.81 },
+  bet: { label: "Victoire ou nul équipe 1", p: 0.81 },
   lh: 1.84,
   la: 1.02,
   outcomes: { home: 0.52, draw: 0.25, away: 0.23, over25: 0.55, btts: 0.5 },
@@ -63,12 +63,28 @@ function makeAi(steps, env = {}, clock = { t: Date.UTC(2026, 9, 8, 12) }) {
 
 test("le texte envoyé à l'IA contient les chiffres utiles et seulement eux", () => {
   const p = buildPrompt(CTX);
-  for (const needle of ["Arsenal FC (domicile) contre Chelsea FC (extérieur)", "Premier League", "2026-10-12", "Victoire ou nul domicile", "81 %", "1.84", "VVNDV", "Confrontations directes", "Quantité de données : bonne"]) {
+  for (const needle of ["Arsenal FC (équipe 1, domicile) contre Chelsea FC (équipe 2, extérieur)", "Premier League", "2026-10-12", "Victoire ou nul équipe 1", "81 %", "1.84", "VVNDV", "Confrontations directes", "Quantité de données : bonne"]) {
     assert.ok(p.includes(needle), `manque : ${needle}\n${p}`);
   }
   // Données absentes : pas de ligne vide ni « undefined ».
   const minimal = buildPrompt({ home: "A", away: "B", bet: { label: "Match nul", p: 0.3 }, lh: 1, la: 1 });
   assert.ok(!/undefined|NaN|null/.test(minimal), minimal);
+  // Un pari ordinaire n'est pas présenté comme remboursable.
+  assert.ok(!/rembours/.test(p) && !/rembours/.test(minimal));
+});
+
+test("pari à ligne entière : l'IA sait quand la mise est remboursée et que la probabilité donnée est celle de gagner", () => {
+  const bet = { label: "Plus de 2 buts", p: 0.74, push: 0.23, refund: { p: 0.23, when: "le match se termine avec exactement 2 buts au total" } };
+  const p = buildPrompt({ ...CTX, bet });
+  assert.match(p, /Pari étudié : Plus de 2 buts/);
+  assert.match(p, /remboursé \(mise rendue\) si le match se termine avec exactement 2 buts au total : 23 % de chances/);
+  assert.match(p, /probabilité du modèle ci-dessus est celle de le gagner quand il n'est pas remboursé/);
+});
+
+test("la probabilité transmise à l'IA ne dépasse jamais 99 % (pari quasi certain)", () => {
+  const p = buildPrompt({ ...CTX, bet: { label: "Plus de 0.5 buts", p: 0.9993 } });
+  assert.match(p, /Probabilité du modèle : 99 % \(cote équitable 1\.01\)/);
+  assert.ok(!/100 %/.test(p), p);
 });
 
 test("forme de requête principale : Sonnet 5.5, sortie structurée, réflexion minimale, aucun paramètre refusé", () => {

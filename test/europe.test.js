@@ -341,7 +341,7 @@ test("mode Auto : un match entre championnats, un match avec un club de coupe se
   assert.deepEqual(r.resultats.slice(0, 3).map((x) => x.competition), ["Ligue des champions", "Match entre clubs européens", "Ligue des champions"]);
   for (const x of r.resultats.slice(0, 3)) {
     assert.ok(x.comparaisonEntreChampionnats, `${x.equipe1} – ${x.equipe2}`);
-    assert.ok(x.probabilite >= 55 && x.probabilite <= 88, `p = ${x.probabilite}`);
+    assert.ok(x.probabilite > 50 && x.probabilite <= 99, `p = ${x.probabilite}`);
     assert.ok(x.typePari);
     assert.notEqual(x.niveauConfiance, "eleve");
   }
@@ -370,7 +370,7 @@ test("Top Matchs : les matchs de Ligue des champions peuvent être proposés et 
     assert.notEqual(m.niveauConfiance, "eleve");
     assert.ok(Date.parse(m.date) > NOW && Date.parse(m.date) <= NOW + 72 * HOUR);
     assert.ok(m.statsHome && m.statsAway);
-    assert.ok(m.probabilite >= 50 && m.probabilite <= 93);
+    assert.ok(m.probabilite > 50 && m.probabilite <= 99);
   }
   assert.equal(new Set(r.topMatches.map((m) => m.id)).size, 3);
 });

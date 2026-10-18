@@ -2,7 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { runBacktest, runBacktestAsync, tuneModel } = require("../src/backtest");
+const { runBacktest, runBacktestAsync, tuneModel, tallyPick } = require("../src/backtest");
 const { simulateLeague, mulberry32, poissonSample, DAY } = require("./helpers");
 
 const sims = [1, 2, 3, 4, 5].map((seed) => simulateLeague({ teams: 18, seasons: 4, seed }));
@@ -25,6 +25,41 @@ test("les paris choisis automatiquement se réalisent à peu près aussi souvent
   const r = runBacktest(leagues, OPTS);
   assert.ok(r.paris.matchs > 800);
   assert.ok(Math.abs(r.paris.ecart) < 0.04, `écart ${r.paris.ecart}`);
+});
+
+test("paris automatiques sans limite de cote : toujours le plus probable, aucune plage, aucun match écarté", () => {
+  const r = runBacktest(leagues, OPTS);
+  assert.match(r.paris.description, /le plus probable, sans limite de cote/);
+  assert.equal(r.paris.matchs, r.matchsEvalues, "chaque match reçoit un pari");
+  assert.ok(r.paris.probabiliteMoyennePredite > 0.9, `${r.paris.probabiliteMoyennePredite} : ce sont les paris les plus sûrs`);
+  assert.ok(Math.abs(r.paris.ecart) < 0.03, `écart ${r.paris.ecart}`);
+});
+
+test("paris automatiques avec un plafond de probabilité : plus de paris quasi certains, les lignes entières remboursées ne comptent pas", () => {
+  const free = runBacktest(leagues, OPTS);
+  const capped = runBacktest(leagues, { ...OPTS, pick: { maxP: 0.9 } });
+  assert.match(capped.paris.description, /jusqu'à 90 %/);
+  assert.ok(capped.paris.probabiliteMoyennePredite < free.paris.probabiliteMoyennePredite - 0.05);
+  assert.ok(capped.paris.probabiliteMoyennePredite <= 0.9);
+  // Sous le plafond, des paris « plus de 1 but » ou « moins de 2 buts » deviennent les plus probables : quand le total tombe pile sur la
+  // ligne ils sont remboursés, donc écartés du décompte (la probabilité annoncée est celle de gagner quand le pari n'est pas remboursé).
+  assert.ok(capped.paris.matchs < capped.matchsEvalues, `${capped.paris.matchs} sur ${capped.matchsEvalues}`);
+  // … et les probabilités annoncées restent justes, remboursements compris.
+  assert.ok(Math.abs(capped.paris.ecart) < 0.03, `écart ${capped.paris.ecart}`);
+});
+
+test("tallyPick : un pari remboursé n'est ni gagné ni perdu, il n'entre pas dans le décompte", () => {
+  const picks = { n: 0, sp: 0, hits: 0 };
+  tallyPick(picks, { label: "Plus de 2 buts", p: 0.7 }, 1, 1); // exactement 2 buts : remboursé
+  tallyPick(picks, { label: "Équipe 1 moins de 1 but", p: 0.6 }, 1, 3); // l'équipe 1 marque exactement 1 but : remboursé
+  assert.deepEqual(picks, { n: 0, sp: 0, hits: 0 });
+  tallyPick(picks, { label: "Plus de 2 buts", p: 0.7 }, 2, 1); // gagné
+  tallyPick(picks, { label: "Plus de 2 buts", p: 0.7 }, 0, 1); // perdu
+  assert.equal(picks.n, 2);
+  assert.ok(Math.abs(picks.sp - 1.4) < 1e-12);
+  assert.equal(picks.hits, 1);
+  tallyPick(picks, { label: "Victoire équipe 1 et plus de 0.5 buts", p: 0.5 }, 1, 0); // pari ordinaire gagné
+  assert.deepEqual([picks.n, picks.hits], [3, 2]);
 });
 
 test("calibration : les tranches bien fournies restent proches de la réalité", () => {
@@ -94,7 +129,7 @@ test("rapport : pente de calibration, buts par match prévus et réels, réglage
   assert.ok(r.butsParMatch.prevus > 1);
   assert.ok(Math.abs(r.butsParMatch.prevus / r.butsParMatch.reels - 1) < 0.06, JSON.stringify(r.butsParMatch));
   for (const m of r.marches) assert.ok(Number.isFinite(m.pente), m.marche);
-  const home = r.marches.find((m) => m.marche === "Victoire domicile");
+  const home = r.marches.find((m) => m.marche === "Victoire équipe 1");
   assert.ok(home.pente > 0.7 && home.pente < 1.3, `pente ${home.pente}`);
   assert.ok(r.parChampionnat.every((c) => c.butsPrevus > 0 && c.butsReels > 0));
   assert.equal(r.parametres.modele.demiVieJours, 300);
@@ -142,10 +177,10 @@ test("niveau de buts : sans hausse, la mémoire courte ne dégrade pas le résul
 test("rapport : marchés supplémentaires, dispersion des buts, tranches de calibration comparables aux anciens contrôles", () => {
   const r = runBacktest(leagues, OPTS);
   const labels = r.marches.map((m) => m.marche);
-  for (const label of ["Plus de 3.5 buts", "Equipe domicile 0.5 buts plus", "Equipe extérieur 0.5 buts plus", "Equipe domicile 1.5 buts plus", "Equipe extérieur 1.5 buts plus"]) {
+  for (const label of ["Plus de 3.5 buts", "Équipe 1 plus de 0.5 buts", "Équipe 2 plus de 0.5 buts", "Équipe 1 plus de 1.5 buts", "Équipe 2 plus de 1.5 buts"]) {
     assert.ok(labels.includes(label), label);
   }
-  assert.deepEqual(labels.slice(0, 8), ["Victoire domicile", "Match nul", "Victoire extérieur", "Victoire ou nul domicile", "Victoire ou nul extérieur", "Plus de 1.5 buts", "Plus de 2.5 buts", "Les deux équipes marquent"]);
+  assert.deepEqual(labels.slice(0, 8), ["Victoire équipe 1", "Match nul", "Victoire équipe 2", "Victoire ou nul équipe 1", "Victoire ou nul équipe 2", "Plus de 1.5 buts", "Plus de 2.5 buts", "Les deux équipes marquent"]);
   assert.ok(r.butsParMatch.ecartTypeReels > 1 && r.butsParMatch.ecartTypeReels < 2.5, JSON.stringify(r.butsParMatch));
   // Seuls les 8 premiers marchés alimentent les tranches de calibration.
   assert.equal(r.calibration.reduce((s, b) => s + b.matchs, 0), 8 * r.matchsEvalues);
@@ -164,7 +199,7 @@ test("rythme : le rapprocher de la moyenne améliore les totaux de buts sans ab�
   const calm = run({ rhythmExponent: 0.3 });
   const uniform = run({ strengthExponent: 0.3 });
   const brier = (r, label) => r.marches.find((m) => m.marche === label).brierModele;
-  for (const label of ["Plus de 1.5 buts", "Plus de 2.5 buts", "Les deux équipes marquent", "Equipe domicile 1.5 buts plus"]) {
+  for (const label of ["Plus de 1.5 buts", "Plus de 2.5 buts", "Les deux équipes marquent", "Équipe 1 plus de 1.5 buts"]) {
     assert.ok(brier(calm, label) < brier(plain, label), `${label} : ${brier(calm, label)} contre ${brier(plain, label)}`);
   }
   assert.ok(calm.resultat1N2.brierModele <= plain.resultat1N2.brierModele * 1.001, `${calm.resultat1N2.brierModele} contre ${plain.resultat1N2.brierModele}`);

@@ -10,6 +10,13 @@ const num = (v, d) => {
 const csv = (v) => (v ? String(v).split(",").map((s) => s.trim()).filter(Boolean) : null);
 // Interrupteur « arrêt » : false / off / 0 / non / no (majuscules ou non). Toute autre valeur, ou l'absence de valeur, laisse activé.
 const isOff = (v) => v !== undefined && v !== null && ["false", "off", "0", "non", "no"].includes(String(v).trim().toLowerCase());
+// Plafond de probabilité des paris automatiques : « 0.95 » ou « 95 » (en %) donnent 95 % ; entre 50 % et 100 %. Absent, illisible ou
+// nul : aucun plafond (1).
+const pickCap = (v) => {
+  const n = Number(typeof v === "string" ? v.replace(",", ".").replace("%", "") : v);
+  if (v === undefined || v === null || v === "" || !Number.isFinite(n) || n <= 0) return 1;
+  return clamp(n > 1 ? n / 100 : n, 0.5, 1);
+};
 
 const DEFAULT_ORIGINS = [
   "https://analyseur-foot-web.vercel.app",
@@ -102,13 +109,14 @@ function loadConfig(env = process.env) {
       origins: [...DEFAULT_ORIGINS, ...(csv(env.ALLOWED_ORIGINS) || [])], // ALLOWED_ORIGINS s'ajoute à la liste par défaut
       patterns: ORIGIN_PATTERNS,
     },
+    // « Top Matchs » et « Auto » retiennent, pour chaque match, le pari le plus probable, quelle que soit sa cote : aucune cote visée, aucune
+    // plage de probabilité. PICK_MAX_PROBABILITY (facultatif, par exemple 0.95 ou 95) plafonne la probabilité des paris retenus, pour
+    // écarter les paris quasi certains (cote proche de 1) si on les trouve trop évidents ; absent, il n'y a aucun plafond.
     top: {
       count: 3,
       windowHours: num(env.TOP_WINDOW_HOURS, 72),
       maxWindowHours: num(env.TOP_MAX_WINDOW_HOURS, 168),
-      minLegP: 0.55,
-      maxLegP: 0.88,
-      targetOdds: num(env.TOP_TARGET_ODDS, 2.5),
+      maxLegP: pickCap(env.PICK_MAX_PROBABILITY),
       budgetMs: 25000,
     },
   };

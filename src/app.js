@@ -234,7 +234,7 @@ function createApp({ config, data, ai, analysis, coupons, europe = null, tuner =
           if (!ready.length) throw Object.assign(new Error("Aucune donnée disponible pour le moment."), { code: "NO_DATA" });
           const r = await runBacktestAsync(
             ready.map((d) => ({ key: d.league.key, finished: d.finished })),
-            { now: now(), evalDays: jours, stepDays: pas, model: { ...config.model, ...data.getModelParams(), ...essai } }
+            { now: now(), evalDays: jours, stepDays: pas, model: { ...config.model, ...data.getModelParams(), ...essai }, pick: { maxP: config.top.maxLegP } }
           );
           return { genereLe: new Date(now()).toISOString(), reglages: data.getModelParams(), ...(Object.keys(essai).length ? { essai } : {}), ...r };
         },

@@ -3,6 +3,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { buildWorld } = require("./world");
+const { MARKETS, evaluate } = require("../src/markets");
 
 const leg = (equipe1, equipe2, typePari) => ({ equipe1, equipe2, typePari });
 
@@ -13,7 +14,8 @@ test("une sélection reconnue donne une probabilité, une cote estimée et les s
   assert.equal(r.equipe1, "Arsenal FC");
   assert.equal(r.equipe2, "Chelsea FC");
   assert.equal(r.competition, "Premier League");
-  assert.equal(r.typePari, "Victoire ou nul domicile");
+  // L'ancien nom du pari est reconnu ; la réponse donne le nom actuel.
+  assert.equal(r.typePari, "Victoire ou nul équipe 1");
   assert.ok(r.probabilite > 20 && r.probabilite < 99, `p = ${r.probabilite}`);
   assert.ok(Math.abs(r.coteEstimee - 100 / r.probabilite) < 0.02);
   assert.ok(["faible", "moyen", "eleve"].includes(r.niveauConfiance));
@@ -271,4 +273,72 @@ test("les noms courants des grands clubs sont reconnus sans aucun nom alternatif
       ["ok", "FC Barcelona", "Club Atlético de Madrid"],
     ]
   );
+});
+
+test("les 102 types de paris : analysés de bout en bout, probabilité du modèle, cote estimée et remboursement des lignes entières", async () => {
+  const w = buildWorld({ aiBehaviour: "off" });
+  const { core } = await (async () => {
+    await w.analysis.loadAll();
+    return w.analysis.prepare(w.analysis.resolveTeams("Arsenal", "Chelsea"));
+  })();
+  const results = await w.analysis.analyzeLegs(MARKETS.map((m) => leg("Arsenal", "Chelsea", m.label)));
+  assert.equal(results.length, 102);
+  for (const [i, m] of MARKETS.entries()) {
+    const r = results[i];
+    assert.equal(r.etat, "ok", m.label);
+    assert.equal(r.typePari, m.label);
+    const ev = evaluate(core.matrix, m);
+    const expected = Math.min(ev.p, 0.99) * 100;
+    assert.ok(Math.abs(r.probabilite - expected) < 0.06, `${m.label} : ${r.probabilite} contre ${expected}`);
+    assert.equal(r.probabilite, r.probabiliteModele, "IA désactivée : aucune correction");
+    assert.ok(r.probabilite <= 99 && r.probabilite > 0, m.label);
+    assert.ok(Math.abs(r.coteEstimee / (100 / r.probabilite) - 1) < 0.015, `${m.label} : cote ${r.coteEstimee} pour ${r.probabilite} %`); // la probabilité affichée est arrondie au dixième
+    if (m.push) {
+      assert.ok(r.remboursement, `${m.label} : remboursement manquant`);
+      assert.ok(Math.abs(r.remboursement.probabilite - ev.push * 100) < 0.06, m.label);
+      assert.equal(r.remboursement.quand, m.refundWhen);
+      assert.match(r.justification, /remboursé \(mise rendue\)/);
+      assert.ok(r.remboursement.probabilite > 5 && r.remboursement.probabilite < 60, `${m.label} : ${r.remboursement.probabilite} %`);
+    } else {
+      assert.equal(r.remboursement, undefined, `${m.label} n'est pas remboursable`);
+      assert.ok(!/rembours/.test(r.justification), m.label);
+    }
+  }
+});
+
+test("jamais 100 % : un pari quasi certain est affiché à 99 % au plus, avec une cote d'au moins 1.01", async () => {
+  const w = buildWorld({ aiBehaviour: "off" });
+  const [r] = await w.analysis.analyzeLegs([leg("Arsenal", "Chelsea", "Plus de 0.5 buts")]);
+  assert.ok(r.probabilite <= 99 && r.coteEstimee >= 1.01);
+  const f = w.analysis.finalProbability;
+  assert.equal(f(0.9995, null, false).p, 0.99);
+  assert.equal(f(0.9995, { adjustment: 3 }, false).p, 0.99);
+  assert.equal(f(0.9995, { adjustment: -3 }, false).p <= 0.99, true);
+  const { probabiliteModele } = (await w.analysis.analyzeLegs([leg("Arsenal", "Chelsea", "Au moins une équipe marque plus de 0.5 buts")]))[0];
+  assert.ok(probabiliteModele <= 99);
+});
+
+test("anciens noms de paris envoyés par une ancienne version de l'application : la réponse porte le nom actuel", async () => {
+  const w = buildWorld({ aiBehaviour: "off" });
+  const rs = await w.analysis.analyzeLegs([
+    leg("Arsenal", "Chelsea", "Victoire domicile"),
+    leg("Arsenal", "Chelsea", "Victoire équipe 1"),
+    leg("Arsenal", "Chelsea", "Victoire/nul extérieur + 1.5 buts plus"),
+    leg("Arsenal", "Chelsea", "Equipe extérieur 0.5 buts plus"),
+  ]);
+  assert.deepEqual(rs.map((r) => r.typePari), ["Victoire équipe 1", "Victoire équipe 1", "Victoire ou nul équipe 2 et plus de 1.5 buts", "Équipe 2 plus de 0.5 buts"]);
+  assert.equal(rs[0].probabilite, rs[1].probabilite);
+});
+
+test("l'IA reçoit le cas de remboursement d'une ligne entière et la probabilité de gagner quand le pari n'est pas remboursé", async () => {
+  const w = buildWorld();
+  const [r] = await w.analysis.analyzeLegs([leg("Arsenal", "Chelsea", "Plus de 2 buts")]);
+  assert.equal(r.etat, "ok");
+  const ctx = w.ai.calls[w.ai.calls.length - 1];
+  assert.equal(ctx.bet.label, "Plus de 2 buts");
+  assert.equal(ctx.bet.refund.when, "le match se termine avec exactement 2 buts au total");
+  assert.ok(ctx.bet.refund.p > 0.1 && ctx.bet.push === ctx.bet.refund.p);
+  // Un pari ordinaire n'a pas de remboursement.
+  await w.analysis.analyzeLegs([leg("Arsenal", "Chelsea", "Plus de 2.5 buts")]);
+  assert.equal(w.ai.calls[w.ai.calls.length - 1].bet.refund, undefined);
 });

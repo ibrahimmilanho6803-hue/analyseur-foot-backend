@@ -1,14 +1,14 @@
 "use strict";
 
 const { round } = require("./util");
-const { thinLegs, selectCoupon, bestForFixture } = require("./picks");
+const { bestForFixture, selectTop } = require("./picks");
+const { resolveMarket, refundInfo } = require("./markets");
 const { matchStats } = require("./stats");
-const { WARNING_ODDS } = require("./analysis");
+const { WARNING_ODDS, MAX_SHOWN } = require("./analysis");
 const { isCup } = require("./leagues");
 
 const TOP_TTL_MS = 15 * 60000;
 const PARTIAL_TTL_MS = 60000;
-const SAFETY = 1.02; // marge sur l'objectif de cote, pour absorber la petite correction de l'IA
 
 // `europe` (facultatif) : matchs de coupes d'Europe et comparaison entre championnats (europe.js). « Top Matchs » ne retient des matchs
 // de coupe que si TOP_CUPS n'est pas coupé ; le mode Auto peut analyser n'importe quel match qu'on lui donne.
@@ -18,7 +18,17 @@ function createCoupons({ config, data, analysis, europe = null, now = Date.now, 
   const { computeCore, reviewWithAi, aiPublic, finalProbability, confidence, modelJustification } = analysis;
   const { pct1, unresolved, unresolvedFrom, crossPublic } = analysis.helpers;
 
-  // Matchs à venir de tous les championnats prêts (et des coupes d'Europe), avec leurs paris candidats.
+  // Pari le plus probable d'un match (le plus fiable, quelle que soit sa cote), avec les probabilités abaissées de la correction mesurée
+  // sur les paris automatiques (jamais relevées).
+  const bestOf = (core, shift) => bestForFixture(core.probs.map((x) => ({ ...x, p: Math.max(0.01, x.p + shift) })), { maxP: top.maxLegP });
+
+  // Le pari tel que l'IA et l'écran le reçoivent : un pari remboursable (ligne entière) porte la probabilité et le cas du remboursement.
+  const betOf = (best) => {
+    const market = best.push > 0 ? resolveMarket(best.label) : null;
+    return { label: best.label, p: best.p, ...(market ? { push: best.push, refund: { p: best.push, when: market.refundWhen } } : {}) };
+  };
+
+  // Matchs à venir de tous les championnats prêts (et des coupes d'Europe), avec leur meilleur pari.
   function gather(ready, nowMs, hours, minLevel, shift) {
     const until = nowMs + hours * 3600000;
     const out = [];
@@ -27,10 +37,9 @@ function createCoupons({ config, data, analysis, europe = null, now = Date.now, 
         if (f.kickoff <= nowMs || f.kickoff > until) continue;
         const core = computeCore(ld, f.home.id, f.away.id);
         if (core.quality.level < minLevel) continue;
-        const calibrated = core.probs.map((x) => ({ label: x.label, p: Math.max(0.01, x.p + shift) }));
-        const legs = thinLegs(calibrated, { minP: top.minLegP, maxP: top.maxLegP });
-        if (!legs.length) continue;
-        out.push({ id: f.id, leagueKey: ld.league.key, kickoff: f.kickoff, quality: core.quality.level, legs, fixture: f, leagueData: ld, core });
+        const best = bestOf(core, shift);
+        if (!best) continue;
+        out.push({ id: f.id, leagueKey: ld.league.key, kickoff: f.kickoff, quality: core.quality.level, best, fixture: f, leagueData: ld, core });
       }
     }
     // Matchs de coupes d'Europe : les deux clubs viennent de championnats différents, l'estimation est donc moins précise. Pour ne
@@ -46,15 +55,14 @@ function createCoupons({ config, data, analysis, europe = null, now = Date.now, 
         const shared = home.rated && away.rated && home.leagueKey === away.leagueKey ? ready.find((d) => d.league.key === home.leagueKey) : null;
         const core = shared ? computeCore(shared, home.id, away.id) : europe.core(home, away);
         if (!core || core.quality.level < Math.max(1, minLevel)) continue;
-        const calibrated = core.probs.map((x) => ({ label: x.label, p: Math.max(0.01, x.p + shift) }));
-        const legs = thinLegs(calibrated, { minP: top.minLegP, maxP: top.maxLegP });
-        if (!legs.length) continue;
+        const best = bestOf(core, shift);
+        if (!best) continue;
         out.push({
           id: f.id,
           leagueKey: f.cup.key,
           kickoff: f.kickoff,
           quality: core.quality.level,
-          legs,
+          best,
           fixture: f,
           leagueData: { league: f.cup, finished: europe.relevantFinished(home, away), fixtures: [] },
           core,
@@ -73,10 +81,11 @@ function createCoupons({ config, data, analysis, europe = null, now = Date.now, 
       date: new Date(f.kickoff).toISOString(),
       meilleurPari: bet.label,
       probabilite: pct1(fin.p),
-      probabiliteModele: pct1(bet.p - shift),
+      probabiliteModele: pct1(Math.min(bet.p - shift, MAX_SHOWN)),
       ...(shift ? { ajustementCalibrage: round(shift * 100, 1) } : {}),
       ajustementIA: fin.adjustment,
       coteEstimee: round(1 / fin.p, 2),
+      ...(bet.refund ? { remboursement: refundInfo(resolveMarket(bet.label), bet.push) } : {}),
       niveauConfiance: confidence(c.core.quality, fin.p, review && review.confiance),
       justification: review ? review.justification : modelJustification({ home: f.home.name, away: f.away.name, bet, core: c.core, stats }),
       vigilance: review ? review.vigilance : "",
@@ -118,7 +127,6 @@ function createCoupons({ config, data, analysis, europe = null, now = Date.now, 
     const base = {
       genereLe: new Date(nowMs).toISOString(),
       fenetreHeures: windowHours,
-      objectifCote: top.targetOdds,
       avertissement: WARNING_ODDS,
       complet: pending.length === 0,
       donnees: {
@@ -130,15 +138,13 @@ function createCoupons({ config, data, analysis, europe = null, now = Date.now, 
       },
     };
     if (!cands.length) {
-      return { ...base, topMatches: [], coteTotale: "0.00", probabiliteCombinee: 0, objectifCoteAtteint: false, ia: { statut: "non_applicable" }, message: `Aucun match à venir trouvé dans les ${windowHours} prochaines heures.` };
+      return { ...base, topMatches: [], coteTotale: "0.00", probabiliteCombinee: 0, ia: { statut: "non_applicable" }, message: `Aucun match à venir trouvé dans les ${windowHours} prochaines heures.` };
     }
 
-    const sel = selectCoupon(cands, { count: top.count, targetOdds: top.targetOdds * SAFETY });
     const picks = await Promise.all(
-      sel.legs.map(async (leg) => {
-        const c = leg.fixture;
+      selectTop(cands, { count: top.count }).map(async (c) => {
         const f = c.fixture;
-        const bet = { label: leg.label, p: leg.p };
+        const bet = betOf(c.best);
         const stats = matchStats(c.leagueData.finished, f.home.id, f.away.id);
         const ctx = {
           home: f.home.name,
@@ -153,9 +159,9 @@ function createCoupons({ config, data, analysis, europe = null, now = Date.now, 
           stats,
           ...(c.core.cross ? { cross: c.core.cross } : {}),
         };
-        const res = await reviewWithAi(ctx, { key: `top:${f.id}:${leg.label}:${Math.round(leg.p * 100)}`, timeoutMs: 20000 });
+        const res = await reviewWithAi(ctx, { key: `top:${f.id}:${bet.label}:${Math.round(bet.p * 100)}`, timeoutMs: 20000 });
         const review = res.review || null;
-        return { f, c, stats, bet, res, review, fin: finalProbability(leg.p, review, false), shift };
+        return { f, c, stats, bet, res, review, fin: finalProbability(bet.p, review, false), shift };
       })
     );
     picks.sort((x, y) => y.fin.p - x.fin.p);
@@ -170,7 +176,6 @@ function createCoupons({ config, data, analysis, europe = null, now = Date.now, 
       topMatches: picks.map(entryFor),
       coteTotale: odds.toFixed(2),
       probabiliteCombinee: pct1(joint),
-      objectifCoteAtteint: Number(odds.toFixed(2)) >= top.targetOdds, // comparé à la cote affichée (2 décimales), sinon « 2.50 » pourrait être déclaré inférieur à 2.5
       ia: { statut: iaStatut, modele: config.anthropic.model },
       ...(picks.length < top.count ? { message: `Seulement ${picks.length} match(s) exploitable(s) trouvé(s) dans les ${windowHours} prochaines heures.` } : {}),
       ...(cands.some((c) => c.quality === 0) ? { avertissementDonnees: "Certaines équipes ont peu de matchs récents : estimation moins fiable." } : {}),
@@ -208,7 +213,7 @@ function createCoupons({ config, data, analysis, europe = null, now = Date.now, 
     }
   }
 
-  // Coupon automatique : pour chaque match saisi, le pari le plus probable dans la plage voulue.
+  // Coupon automatique : pour chaque match saisi, le pari le plus probable (le plus fiable), quelle que soit sa cote.
   async function autoCoupon(matches) {
     await analysis.loadAll();
     const results = await Promise.all(
@@ -217,8 +222,7 @@ function createCoupons({ config, data, analysis, europe = null, now = Date.now, 
           const r = analysis.resolveTeams(m.equipe1, m.equipe2);
           if (r.state !== "ok") return { index, ...unresolvedFrom(r) };
           const { core } = await analysis.prepare(r);
-          const shift = analysis.calibration.pickShift;
-          const pick = bestForFixture(core.probs.map((x) => ({ label: x.label, p: Math.max(0.01, x.p + shift) })), { minP: top.minLegP, maxP: top.maxLegP });
+          const pick = bestOf(core, analysis.calibration.pickShift);
           if (!pick) return { index, ...unresolved("marche_inconnu", { message: "Aucun pari exploitable pour ce match." }) };
           const leg = await analysis.analyzeLeg({ equipe1: r.home.name, equipe2: r.away.name, typePari: pick.label }, { shift: analysis.calibration.pickShift });
           return { index, ...leg };

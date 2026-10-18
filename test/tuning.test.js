@@ -36,13 +36,15 @@ test("réglage automatique et contrôle : sur des données bien décrites par le
   assert.deepEqual(tuner.status().retenu, { halfLifeDays, priorMatches });
 });
 
-test("résultats récents sans lien avec la force des équipes : les probabilités des paris automatiques sont abaissées", async () => {
+test("résultats récents bien plus pauvres en buts que prévu : les probabilités des paris automatiques sont abaissées", async () => {
   const w = bigWorld();
   const rand = mulberry32(5);
   const cut = NOW - 150 * DAY;
+  // Depuis cinq mois, les scores ne suivent plus du tout le modèle (0,9 et 0,7 but par équipe, quelle que soit l'équipe) : les paris les plus
+  // sûrs (« plus de 0.5 buts », « équipe 2 moins de 2.5 buts »…) se réalisent nettement moins souvent que les 93 % annoncés.
   for (const key of Object.keys(w.store)) {
     for (const season of ["cur", "prev"]) {
-      w.store[key][season] = w.store[key][season].map((m) => (m.status === "finished" && m.kickoff >= cut ? { ...m, hg: poissonSample(1.45, rand), ag: poissonSample(1.15, rand) } : m));
+      w.store[key][season] = w.store[key][season].map((m) => (m.status === "finished" && m.kickoff >= cut ? { ...m, hg: poissonSample(0.9, rand), ag: poissonSample(0.7, rand) } : m));
     }
   }
   const tuner = createTuner({ config: w.config, data: w.data, analysis: w.analysis, now: () => w.clock.t, log: quiet });
@@ -50,6 +52,7 @@ test("résultats récents sans lien avec la force des équipes : les probabilit�
   assert.equal(before.topMatches[0].ajustementCalibrage, undefined);
   const r = await tuner.run();
   assert.equal(r.calibrage.applique, true, JSON.stringify(r.calibrage));
+  assert.ok(r.calibrage.observee < r.calibrage.annoncee - 0.05, JSON.stringify(r.calibrage));
   assert.ok(w.analysis.calibration.pickShift < -0.02);
   w.clock.t += 20 * 60000;
   const after = await w.coupons.topMatches();
