@@ -37,8 +37,13 @@ test("Top 4 : la cote totale atteint l'objectif de 5 et reste cohérente avec le
   assert.equal(r.objectifCoteAtteint, true);
   assert.ok(Number(r.coteTotale) >= 5, r.coteTotale);
   assert.ok(Number(r.coteTotale) < 6.5, `une cote bien au-delà de 5 voudrait dire des paris inutilement hasardeux : ${r.coteTotale}`);
-  const product = r.topMatches.reduce((acc, m) => acc * (100 / m.probabilite), 1);
-  assert.ok(Math.abs(Number(r.coteTotale) - product) < 0.08, `${r.coteTotale} vs ${product}`);
+  // La cote totale se refait à partir de ce qui est affiché : elle ne dépasse ni 1 ÷ le produit des probabilités affichées (« Mon coupon »),
+  // ni le produit des cotes affichées de chaque match ; l'objectif de 5 tient donc quelle que soit la façon de refaire le calcul.
+  const byOdds = r.topMatches.reduce((acc, m) => acc * m.coteEstimee, 1);
+  const byProbability = 100 ** r.topMatches.length / r.topMatches.reduce((acc, m) => acc * m.probabilite, 1);
+  assert.equal(r.coteTotale, Math.min(byOdds, byProbability).toFixed(2));
+  assert.ok(byOdds >= 5 - 0.005 && byProbability >= 5 - 0.005, `${byOdds} / ${byProbability}`);
+  assert.ok(Math.abs(Number(r.coteTotale) - byOdds) < 0.08, `${r.coteTotale} vs ${byOdds}`);
   const joint = r.topMatches.reduce((acc, m) => acc * (m.probabilite / 100), 1);
   assert.ok(Math.abs(r.probabiliteCombinee - joint * 100) < 0.4);
   assert.ok(r.probabiliteCombinee < 20 && r.probabiliteCombinee > 14, `${r.probabiliteCombinee} %`);
@@ -251,8 +256,13 @@ test("coupon automatique : un pari par match, cote totale visée atteinte avec d
   assert.ok(Math.max(...ps) - Math.min(...ps) < 10, ps.join(", "));
   const joint = ok.reduce((acc, x) => acc * (x.probabilite / 100), 1);
   assert.ok(Math.abs(r.probabiliteCombinee - joint * 100) < 0.4);
-  const odds = ok.reduce((acc, x) => acc * x.coteEstimee, 1);
-  assert.ok(Math.abs(Number(r.coteTotale) - odds) < 0.01);
+  // La cote totale se refait à partir de ce qui est affiché : elle ne dépasse ni 1 ÷ le produit des probabilités, ni le produit des cotes
+  // (on atteint donc la cote visée quelle que soit la façon de refaire le calcul), et elle est l'une des deux à 0,01 près.
+  const byOdds = ok.reduce((acc, x) => acc * x.coteEstimee, 1);
+  const byProbability = 1 / joint;
+  assert.equal(r.coteTotale, Math.min(byOdds, byProbability).toFixed(2));
+  assert.ok(Number(r.coteTotale) <= byOdds + 0.005 && Number(r.coteTotale) <= byProbability + 0.005);
+  assert.ok(byOdds >= 5 - 0.005 && byProbability >= 5 - 0.005, `${byOdds} / ${byProbability}`);
 });
 
 test("coupon automatique : plus il y a de matchs, plus les paris sont sûrs pour la même cote totale", async () => {

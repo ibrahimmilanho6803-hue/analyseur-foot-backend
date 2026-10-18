@@ -92,6 +92,10 @@ peut être sûr (5 matchs : environ 72 %, 6 matchs : environ 76 %) ; avec 3 matc
 `TOP_TARGET_ODDS` (3 : environ 76 % par pari avec 4 matchs, 2,5 : environ 80 %) ; pour une cote plus haute, augmentez-la, au prix de paris
 moins fiables.
 
+**Cote affichée.** La cote totale (`coteTotale`) est celle que l'on retrouve à partir de ce qui est affiché : le plus bas de 1 ÷ le produit des
+probabilités affichées (ce que calcule « Mon coupon » une fois les paris ajoutés) et du produit des cotes affichées de chaque match (ce que
+fait un parieur à la main). L'objectif est donc atteint quelle que soit la façon de refaire le calcul, au centième près.
+
 **Fenêtre de probabilité.** Chaque pari reste entre 60 % et 88 % (`PICK_MAX_PROBABILITY` : `0.9`, `90` ou `90 %`, entre 50 % et 100 %,
 pour le plafond). La borne basse descend à 55 % seulement quand c'est la seule façon d'atteindre la cote (trois matchs, par exemple).
 À probabilité égale, le pari le plus simple l'emporte (« plus de 0.5 buts » plutôt que « au moins une équipe marque plus de 0.5 buts ») et

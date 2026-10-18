@@ -728,9 +728,11 @@ test("POST /api/auto-coupon : un coupon mêlant championnat, coupe d'Europe et c
     assert.deepEqual(r.json.resultats.map((x) => Boolean(x.comparaisonEntreChampionnats)), [false, true, true]);
     assert.deepEqual(r.json.resultats.map((x) => x.competition), ["Premier League", "Ligue des champions", "Ligue des champions"]);
     assert.equal(r.json.analyses, 3);
-    // Pari le plus probable de chaque match, quelle que soit sa cote : la cote totale est le produit des cotes estimées.
-    const product = r.json.resultats.reduce((acc, x) => acc * x.coteEstimee, 1);
-    assert.ok(Number(r.json.coteTotale) > 1 && Math.abs(Number(r.json.coteTotale) - product) < 0.02, `${r.json.coteTotale} vs ${product}`);
+    // La cote totale se refait à partir de ce qui est affiché : le plus bas de 1 ÷ le produit des probabilités et du produit des cotes.
+    const byOdds = r.json.resultats.reduce((acc, x) => acc * x.coteEstimee, 1);
+    const byProbability = 1 / r.json.resultats.reduce((acc, x) => acc * (x.probabilite / 100), 1);
+    assert.equal(r.json.coteTotale, Math.min(byOdds, byProbability).toFixed(2));
+    assert.ok(Number(r.json.coteTotale) > 1 && Math.abs(Number(r.json.coteTotale) - byOdds) < 0.1, `${r.json.coteTotale} vs ${byOdds}`);
     assert.ok(r.json.resultats.every((x) => x.probabilite > 50 && x.probabilite <= 99), JSON.stringify(r.json.resultats.map((x) => x.probabilite)));
   } finally {
     await s.close();

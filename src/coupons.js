@@ -15,6 +15,16 @@ const PARTIAL_TTL_MS = 60000;
 const SAFETY = 1.04;
 const MAX_PASSES = 3;
 
+// Cote totale telle qu'on peut la refaire à partir de ce que l'écran montre (probabilités à 1 décimale, cotes à 2 décimales) : le plus bas de
+// 1 ÷ le produit des probabilités affichées (ce que calcule « Mon coupon » une fois les paris ajoutés) et du produit des cotes affichées
+// (ce que fait un parieur à la main). Atteindre la cote visée avec ce nombre, c'est l'atteindre quelle que soit la façon de refaire le calcul.
+function totalOdds(shown) {
+  if (!shown.length) return 0;
+  const byProbability = 1 / shown.reduce((acc, x) => acc * (x.probabilite / 100), 1);
+  const byOdds = shown.reduce((acc, x) => acc * x.coteEstimee, 1);
+  return Math.min(byProbability, byOdds);
+}
+
 // `europe` (facultatif) : matchs de coupes d'Europe et comparaison entre championnats (europe.js). « Top Matchs » ne retient des matchs
 // de coupe que si TOP_CUPS n'est pas coupé ; le mode Auto peut analyser n'importe quel match qu'on lui donne.
 function createCoupons({ config, data, analysis, europe = null, now = Date.now, log = console }) {
@@ -150,7 +160,7 @@ function createCoupons({ config, data, analysis, europe = null, now = Date.now, 
       if (!sel.legs.length || signature === previous) break; // même choix qu'à l'essai précédent : le refaire ne changerait rien
       previous = signature;
       const picks = await Promise.all(sel.legs.map((leg) => reviewPick(leg, shift)));
-      const odds = picks.reduce((acc, x) => acc / x.fin.p, 1);
+      const odds = totalOdds(picks.map((x) => ({ probabilite: pct1(x.fin.p), coteEstimee: round(1 / x.fin.p, 2) })));
       const reached = Number(odds.toFixed(2)) >= top.targetOdds; // comparé à la cote affichée (2 décimales)
       if (!best || reached || odds > best.odds) best = { picks, odds, reached };
       if (reached || !sel.targetReached) break; // atteint, ou hors d'atteinte avec ces matchs : un nouvel essai ne changerait rien
@@ -203,11 +213,10 @@ function createCoupons({ config, data, analysis, europe = null, now = Date.now, 
     if (!chosen) {
       return { ...base, topMatches: [], coteTotale: "0.00", probabiliteCombinee: 0, objectifCoteAtteint: false, ia: { statut: "non_applicable" }, message: `Aucun pari exploitable trouvé dans les ${windowHours} prochaines heures.` };
     }
-    const { picks, reached } = chosen;
+    const { picks, reached, odds } = chosen;
     picks.sort((x, y) => y.fin.p - x.fin.p);
 
     const joint = picks.reduce((acc, x) => acc * x.fin.p, 1);
-    const odds = picks.reduce((acc, x) => acc / x.fin.p, 1);
     const okCount = picks.filter((x) => x.res.statut === "ok").length;
     const statuts = picks.map((x) => x.res.statut);
     const iaStatut = okCount === picks.length ? "ok" : okCount > 0 ? "partielle" : statuts.every((s) => s === "desactivee") ? "desactivee" : "indisponible";
@@ -302,7 +311,7 @@ function createCoupons({ config, data, analysis, europe = null, now = Date.now, 
       previous = signature;
       const legs = await Promise.all(usable.map((u, i) => analyzeAs(u, sel.legs[i].label)));
       const done = legs.filter((x) => x.etat === "ok");
-      const odds = done.reduce((acc, x) => acc * x.coteEstimee, 1);
+      const odds = totalOdds(done);
       const reached = done.length > 0 && Number(odds.toFixed(2)) >= top.targetOdds;
       if (!best || reached || odds > best.odds) best = { legs, odds, reached, possible: sel.targetReached };
       if (reached || !sel.targetReached || !done.length) break;
@@ -312,7 +321,7 @@ function createCoupons({ config, data, analysis, europe = null, now = Date.now, 
 
     const ok = results.filter((x) => x.etat === "ok");
     const joint = ok.reduce((acc, x) => acc * (x.probabilite / 100), 1);
-    const odds = ok.reduce((acc, x) => acc * x.coteEstimee, 1);
+    const odds = totalOdds(ok);
     const reached = ok.length ? Number(odds.toFixed(2)) >= top.targetOdds : null;
     let message = "";
     if (reached === false) {
