@@ -1,6 +1,6 @@
 {
   "name": "analyseur-foot-api",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "API de l'application Analyseur Foot Pro : modèle statistique de buts + relecture par Claude",
   "main": "server.js",
   "scripts": {
