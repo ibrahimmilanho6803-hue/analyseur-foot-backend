@@ -10,13 +10,15 @@ const num = (v, d) => {
 const csv = (v) => (v ? String(v).split(",").map((s) => s.trim()).filter(Boolean) : null);
 // Interrupteur « arrêt » : false / off / 0 / non / no (majuscules ou non). Toute autre valeur, ou l'absence de valeur, laisse activé.
 const isOff = (v) => v !== undefined && v !== null && ["false", "off", "0", "non", "no"].includes(String(v).trim().toLowerCase());
-// Plafond de probabilité des paris automatiques : « 0.95 » ou « 95 » (en %) donnent 95 % ; entre 50 % et 100 %. Absent, illisible ou
-// nul : aucun plafond (1).
-const pickCap = (v) => {
+// Plafond de probabilité des paris automatiques : « 0.9 » ou « 90 » (en %) donnent 90 % ; entre 50 % et 100 %. Absent, illisible ou nul :
+// la valeur par défaut (`fallback`).
+const pickCap = (v, fallback) => {
   const n = Number(typeof v === "string" ? v.replace(",", ".").replace("%", "") : v);
-  if (v === undefined || v === null || v === "" || !Number.isFinite(n) || n <= 0) return 1;
+  if (v === undefined || v === null || v === "" || !Number.isFinite(n) || n <= 0) return fallback;
   return clamp(n > 1 ? n / 100 : n, 0.5, 1);
 };
+// Cote totale visée par « Top Matchs » et « Auto » : entre 1,5 et 50 ; absente ou illisible : 5.
+const targetOdds = (v) => clamp(num(typeof v === "string" ? v.replace(",", ".") : v, 5), 1.5, 50);
 
 const DEFAULT_ORIGINS = [
   "https://analyseur-foot-web.vercel.app",
@@ -109,14 +111,18 @@ function loadConfig(env = process.env) {
       origins: [...DEFAULT_ORIGINS, ...(csv(env.ALLOWED_ORIGINS) || [])], // ALLOWED_ORIGINS s'ajoute à la liste par défaut
       patterns: ORIGIN_PATTERNS,
     },
-    // « Top Matchs » et « Auto » retiennent, pour chaque match, le pari le plus probable, quelle que soit sa cote : aucune cote visée, aucune
-    // plage de probabilité. PICK_MAX_PROBABILITY (facultatif, par exemple 0.95 ou 95) plafonne la probabilité des paris retenus, pour
-    // écarter les paris quasi certains (cote proche de 1) si on les trouve trop évidents ; absent, il n'y a aucun plafond.
+    // « Top Matchs » et « Auto » choisissent un pari par match de façon que la COTE TOTALE du coupon atteigne TOP_TARGET_ODDS (5 par défaut,
+    // cotes équitables = 1 ÷ probabilité) avec des paris aussi fiables que possible. « Top Matchs » retient 4 matchs. Une cote totale de 5
+    // correspond à une probabilité combinée d'environ 20 % : avec 4 paris, environ 67 % de chances chacun. Plus la cote visée est haute, moins
+    // les paris sont sûrs ; plus elle est basse, plus ils le sont. Chaque pari reste entre minLegP (60 %, ou 55 % si c'est la seule façon
+    // d'atteindre l'objectif) et maxLegP (88 %, ou PICK_MAX_PROBABILITY, par exemple 0.9 ou 90).
     top: {
-      count: 3,
+      count: 4,
       windowHours: num(env.TOP_WINDOW_HOURS, 72),
       maxWindowHours: num(env.TOP_MAX_WINDOW_HOURS, 168),
-      maxLegP: pickCap(env.PICK_MAX_PROBABILITY),
+      targetOdds: targetOdds(env.TOP_TARGET_ODDS),
+      minLegP: 0.6,
+      maxLegP: pickCap(env.PICK_MAX_PROBABILITY, 0.88),
       budgetMs: 25000,
     },
   };

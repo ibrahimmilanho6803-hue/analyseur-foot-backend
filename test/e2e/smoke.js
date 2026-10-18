@@ -59,9 +59,12 @@ async function main() {
 
   const top = await get("/api/top-matches");
   assert.equal(top.status, 200);
-  assert.equal(top.json.topMatches.length, 3);
+  assert.equal(top.json.topMatches.length, 4);
   assert.equal(top.json.ia.statut, "ok");
-  console.log(`✔ Top 3 : ${top.json.topMatches.map((m) => `${m.homeTeam}–${m.awayTeam} (${m.meilleurPari}, ${m.probabilite} %)`).join(" | ")} — cote ${top.json.coteTotale}`);
+  assert.equal(top.json.objectifCote, 5);
+  assert.equal(top.json.objectifCoteAtteint, true);
+  assert.ok(Number(top.json.coteTotale) >= 5, top.json.coteTotale);
+  console.log(`✔ Top 4 : ${top.json.topMatches.map((m) => `${m.homeTeam}–${m.awayTeam} (${m.meilleurPari}, ${m.probabilite} %)`).join(" | ")} — cote ${top.json.coteTotale}`);
 
   const an = await get("/api/analyze", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ equipe1: "Arsenal", equipe2: "Chelsea", typePari: "Les deux équipes marquent" }) });
   assert.equal(an.status, 200);
@@ -120,6 +123,9 @@ async function main() {
   assert.deepEqual(auto.json.resultats.map((r) => Boolean(r.comparaisonEntreChampionnats)), [false, true, true, false, true]);
   assert.deepEqual(auto.json.resultats.map((r) => r.competition), ["Premier League", "Ligue des champions", "Match entre clubs de championnats différents", "Championship", "Match entre clubs de championnats différents"]);
   assert.equal(auto.json.analyses, 5);
+  assert.equal(auto.json.objectifCote, 5);
+  assert.equal(auto.json.objectifCoteAtteint, true);
+  assert.ok(Number(auto.json.coteTotale) >= 5, auto.json.coteTotale);
   const mon = await get("/api/analyze", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ legs: mix.map((m) => ({ ...m, typePari: "Plus de 1.5 buts" })) }) });
   assert.deepEqual(mon.json.legs.map((r) => r.etat), ["ok", "ok", "ok", "ok", "ok"]);
   console.log(`✔ n'importe quel match : coupon automatique à ${auto.json.resultats.length} matchs (cote ${auto.json.coteTotale}), « Mon coupon » identique`);

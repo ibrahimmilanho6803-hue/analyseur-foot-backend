@@ -3,7 +3,7 @@
 const { round, DAY_MS } = require("./util");
 const { fitLeague, expectedGoals, scoreMatrix } = require("./model");
 const { MARKETS, evaluateAll, settle } = require("./markets");
-const { bestForFixture } = require("./picks");
+const { nearestPick } = require("./picks");
 
 // Contrôle de fiabilité « pas à pas » : pour chaque semaine récente, le modèle est ajusté
 // uniquement avec les matchs déjà joués à ce moment-là, puis ses probabilités sont comparées
@@ -121,12 +121,22 @@ function runLeague(acc, key, finished, opts) {
       local.n++;
       local.bm += bm;
       local.br += br;
-      // Le pari que l'application choisirait pour ce match.
-      const best = bestForFixture(probs, pick);
+      // Le pari que l'application choisirait pour ce match : celui dont la probabilité est la plus proche de la probabilité visée
+      // (1 = le plus probable).
+      const best = nearestPick(probs, pick.target, pick);
       if (best) tallyPick(acc.picks, best, m.hg, m.ag);
     }
   }
   acc.byLeague.set(key, local);
+}
+
+// Ce que mesure la rubrique « paris » du rapport : les paris que l'application choisirait pour chaque match.
+function pickDescription(pick) {
+  if (pick.target < 1) {
+    const range = pick.minP > 0 || pick.maxP < 1 ? `, entre ${Math.round(pick.minP * 100)} % et ${Math.round(pick.maxP * 100)} %` : "";
+    return `Pari choisi automatiquement pour chaque match (le plus proche de ${Math.round(pick.target * 100)} % de chances${range})`;
+  }
+  return `Pari choisi automatiquement pour chaque match (le plus probable${pick.maxP < 1 ? `, jusqu'à ${Math.round(pick.maxP * 100)} %` : ", sans limite de cote"})`;
 }
 
 function report(acc, opts) {
@@ -182,7 +192,7 @@ function report(acc, opts) {
     calibration,
     paris: acc.picks.n
       ? {
-          description: `Pari choisi automatiquement pour chaque match (le plus probable${opts.pick.maxP < 1 ? `, jusqu'à ${Math.round(opts.pick.maxP * 100)} %` : ", sans limite de cote"})`,
+          description: pickDescription(opts.pick),
           matchs: acc.picks.n,
           probabiliteMoyennePredite: round(predicted, 3),
           tauxDeReussiteReel: round(hitRate, 3),
@@ -221,7 +231,7 @@ function prepare({ now = Date.now(), evalDays = 120, stepDays = 7, minTrain = 12
     stepDays,
     minTrain,
     model: { halfLifeDays: 300, priorMatches: 10, rho: -0.08, maxGoals: 9, levelHalfLifeDays: 0, levelPriorMatches: 40, strengthExponent: 1, levelFactor: 1, ...model },
-    pick: { maxP: 1, ...pick },
+    pick: { target: 1, minP: 0, maxP: 1, ...pick },
   };
 }
 

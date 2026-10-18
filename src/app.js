@@ -5,6 +5,7 @@ const cors = require("cors");
 const { clamp } = require("./util");
 const { createLimiter } = require("./ratelimit");
 const { runBacktestAsync } = require("./backtest");
+const { pickWindow } = require("./picks");
 const { SwrCache } = require("./cache");
 const { isCup, OTHER, OTHER_KEY } = require("./leagues");
 const { spellingsOf } = require("./teams");
@@ -190,8 +191,10 @@ function createApp({ config, data, ai, analysis, coupons, europe = null, tuner =
       }
       const matches = raw.map(readLeg);
       if (matches.some((m) => !m)) return res.status(400).json({ error: "Chaque match doit contenir equipe1 et equipe2 (texte)." });
-      if (!consume(aiLimit, req, res, matches.length)) return undefined;
-      return res.json(await coupons.autoCoupon(matches));
+      // `ia: false` : réponse du seul modèle statistique, sans appel à l'IA (donc sans quota IA), comme pour /api/analyze.
+      const withAi = !(req.body && req.body.ia === false);
+      if (withAi && !consume(aiLimit, req, res, matches.length)) return undefined;
+      return res.json(await coupons.autoCoupon(matches, { withAi }));
     } catch (e) {
       return next(e);
     }
@@ -234,7 +237,7 @@ function createApp({ config, data, ai, analysis, coupons, europe = null, tuner =
           if (!ready.length) throw Object.assign(new Error("Aucune donnée disponible pour le moment."), { code: "NO_DATA" });
           const r = await runBacktestAsync(
             ready.map((d) => ({ key: d.league.key, finished: d.finished })),
-            { now: now(), evalDays: jours, stepDays: pas, model: { ...config.model, ...data.getModelParams(), ...essai }, pick: { maxP: config.top.maxLegP } }
+            { now: now(), evalDays: jours, stepDays: pas, model: { ...config.model, ...data.getModelParams(), ...essai }, pick: pickWindow(config.top) }
           );
           return { genereLe: new Date(now()).toISOString(), reglages: data.getModelParams(), ...(Object.keys(essai).length ? { essai } : {}), ...r };
         },

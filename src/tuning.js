@@ -2,6 +2,7 @@
 
 const { tuneModel, runBacktestAsync } = require("./backtest");
 const { clamp, round } = require("./util");
+const { pickWindow } = require("./picks");
 
 // Les paris choisis automatiquement se réalisent-ils aussi souvent qu'annoncé ? Sinon, on abaisse
 // leurs probabilités de l'écart observé (jamais l'inverse), à condition que l'écart soit net.
@@ -106,7 +107,7 @@ function createTuner({ config, data, analysis = null, now = Date.now, log = cons
           evalDays: 150,
           stepDays: 7,
           model: { ...fixed, ...data.getModelParams() },
-          pick: { maxP: config.top.maxLegP },
+          pick: pickWindow(config.top),
         });
         const cal = pickCalibration(bt.paris);
         analysis.setPickShift(cal.shift, cal.info);

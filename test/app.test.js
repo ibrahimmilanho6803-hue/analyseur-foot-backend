@@ -292,16 +292,18 @@ test("les noms trop longs ou contenant des caractères de contrôle sont assaini
   }
 });
 
-test("GET /api/top-matches : trois matchs au format de l'application", async () => {
+test("GET /api/top-matches : quatre matchs au format de l'application, avec la cote visée", async () => {
   const s = await start();
   try {
     const r = await s.call("/api/top-matches");
     assert.equal(r.status, 200);
-    assert.equal(r.json.topMatches.length, 3);
+    assert.equal(r.json.topMatches.length, 4);
     assert.ok(r.json.topMatches[0].homeTeam && r.json.topMatches[0].meilleurPari);
     assert.ok(r.json.coteTotale);
-    // Plus d'objectif de cote : la réponse ne le mentionne plus.
-    assert.ok(!("objectifCote" in r.json) && !("objectifCoteAtteint" in r.json));
+    // Cote totale visée : 5, atteinte.
+    assert.equal(r.json.objectifCote, 5);
+    assert.equal(r.json.objectifCoteAtteint, true);
+    assert.ok(Number(r.json.coteTotale) >= 5);
   } finally {
     await s.close();
   }
@@ -325,9 +327,40 @@ test("POST /api/auto-coupon", async () => {
     assert.equal(ok.status, 200);
     assert.equal(ok.json.analyses, 2);
     assert.equal(ok.json.resultats.length, 2);
+    // Deux matchs seulement : la cote visée (5) n'est pas atteignable avec des paris fiables, la réponse le dit.
+    assert.equal(ok.json.objectifCote, 5);
+    assert.equal(ok.json.objectifCoteAtteint, false);
+    assert.match(ok.json.message, /ajoutez des matchs/);
     for (const bad of [{}, { matches: [] }, { matches: "x" }, { matches: [{ equipe1: "A" }] }]) {
       assert.equal((await s.call("/api/auto-coupon", { method: "POST", body: bad })).status, 400);
     }
+  } finally {
+    await s.close();
+  }
+});
+
+test("POST /api/auto-coupon : quatre matchs, cote visée atteinte ; ia false = modèle seul, sans appel à l'IA ni quota IA", async () => {
+  const s = await start();
+  try {
+    const matches = [
+      { equipe1: "Arsenal", equipe2: "Chelsea" },
+      { equipe1: "Real Madrid", equipe2: "Barcelona" },
+      { equipe1: "Juventus", equipe2: "Inter" },
+      { equipe1: "Sevilla", equipe2: "Valencia" },
+    ];
+    const r = await s.call("/api/auto-coupon", { method: "POST", body: { matches, ia: false } });
+    assert.equal(r.status, 200);
+    assert.equal(s.w.ai.calls.length, 0);
+    assert.equal(r.json.analyses, 4);
+    assert.equal(r.json.objectifCote, 5);
+    assert.equal(r.json.objectifCoteAtteint, true);
+    assert.ok(Number(r.json.coteTotale) >= 5 && Number(r.json.coteTotale) < 6.5);
+    assert.ok(!("message" in r.json));
+    for (const x of r.json.resultats) assert.equal(x.ia.statut, "non_demandee");
+    const withAi = await s.call("/api/auto-coupon", { method: "POST", body: { matches } });
+    assert.equal(withAi.status, 200);
+    assert.ok(s.w.ai.calls.length >= 4);
+    assert.equal(withAi.json.objectifCoteAtteint, true);
   } finally {
     await s.close();
   }

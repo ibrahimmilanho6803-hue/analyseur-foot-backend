@@ -37,8 +37,8 @@ Serveur Node.js (Express) de l'application **Analyseur Foot Pro**. Il calcule de
 | `GET /api/leagues` | Compétitions suivies, avec leur `type` (`championnat` ou `coupe`) et leur `niveau` (`principal` ou `complementaire`). Un interrupteur coupé (`EUROPE_ENABLED`, `EXTRA_LEAGUES_ENABLED`) retire les lignes concernées, ici comme dans `/api/status` : liste identique à celle d'avant ces fonctions. |
 | `GET /api/teams` | Liste des clubs des compétitions chargées, avec leurs écritures courantes (« PSG », « Man City »…) : sert aux suggestions de saisie du site. Les clubs connus **seulement** par une coupe d'Europe (aucun championnat suivi) ont `championnat: "EUR"`. `complet: false` tant qu'un championnat principal ou une coupe n'est pas chargé, ou qu'un complémentaire est encore en cours de chargement. Mise en cache 5 minutes par le navigateur. |
 | `POST /api/analyze` | Analyse d'une sélection `{ equipe1, equipe2, typePari }` ou de plusieurs `{ legs: [...] }` (12 maximum). **N'importe quels deux clubs connus** : même championnat, championnats différents (la réponse porte alors `comparaisonEntreChampionnats`), coupes d'Europe. Avec `"ia": false` dans le corps, réponse **rapide du seul modèle statistique** (aucun appel à l'IA, quota IA intact, `ia.statut: "non_demandee"`) : le site peut l'afficher tout de suite, puis relancer la demande avec l'IA. |
-| `GET /api/top-matches` | Les 3 paris les plus fiables (3 matchs différents) des prochaines 72 h (jusqu'à 7 jours si besoin), dans les 10 championnats principaux et les coupes d'Europe (`donnees.coupesPretes`) : pour chaque match, son pari le plus probable, **quelle que soit sa cote** (voir « Choix des paris automatiques »). |
-| `POST /api/auto-coupon` | `{ matches: [{ equipe1, equipe2 }] }` : pari le plus probable par match (quelle que soit sa cote), pour n'importe quels clubs connus. |
+| `GET /api/top-matches` | Le « Top Matchs » : **4 matchs différents** parmi ceux des prochaines 72 h (jusqu'à 7 jours si besoin), dans les 10 championnats principaux et les coupes d'Europe (`donnees.coupesPretes`), avec un pari par match choisi pour que la **cote totale atteigne 5** (`objectifCote`, `objectifCoteAtteint`) avec des paris aussi fiables que possible (voir « Choix des paris automatiques »). |
+| `POST /api/auto-coupon` | `{ matches: [{ equipe1, equipe2 }] }` : un pari par match, pour n'importe quels clubs connus, avec la même règle que le Top (cote totale visée 5, paris aussi fiables que possible ; `objectifCote`, `objectifCoteAtteint`, `message`). Avec `"ia": false` dans le corps : réponse du seul modèle statistique, sans appel à l'IA. |
 | `GET /api/backtest?jours=120&championnat=PL` | Rapport de fiabilité sur les matchs récents des 10 championnats principaux, ou d'un championnat précis (complémentaires compris ; pas les coupes). Voir « Contrôle de fiabilité » plus bas. |
 | `/api/analyze-simple` | **Supprimée** (410) : elle permettait à n'importe qui d'utiliser votre clé Anthropic. |
 
@@ -80,21 +80,34 @@ n'ont jamais de remboursement ; le contrôle de fiabilité ne compte pas un pari
 
 ## Choix des paris automatiques (« Top Matchs » et « Auto »)
 
-Pour chaque match, le serveur retient le pari **le plus probable** parmi tous les types, **quelle que soit sa cote** : plus d'objectif de
-cote totale (l'ancien réglage `TOP_TARGET_ODDS` est ignoré, et `objectifCote` / `objectifCoteAtteint` ont disparu de `/api/top-matches`) ni
-de fourchette de probabilité (l'ancienne fenêtre de 55 % à 88 %). « Top Matchs » garde les 3 matchs dont ce pari est le plus sûr. À
-probabilité égale, le pari le plus simple l'emporte (« plus de 0.5 buts » plutôt que « au moins une équipe marque plus de 0.5 buts »), et
-un pari remboursable cède devant un pari qui ne l'est pas. Une ligne entière ne peut jamais être la plus probable : elle se place entre
-ses deux demi-lignes voisines. Aucune probabilité affichée ne dépasse 99 %.
+Les deux écrans suivent la même règle : une **cote totale d'au moins 5** (`TOP_TARGET_ODDS`) avec **des paris aussi fiables que possible**.
+Les cotes sont des cotes équitables (1 ÷ probabilité, sans marge d'opérateur). « Top Matchs » retient **4 matchs** parmi ceux des
+prochaines 72 h (jusqu'à 7 jours si besoin) ; « Auto » prend tous les matchs saisis, un pari par match.
 
-**Ce qu'il faut savoir** : le pari le plus probable d'un match est très souvent « plus de 0.5 buts » (environ 92 à 97 %) ou un « moins de »
-d'une équipe très inférieure, avec une cote équitable de 1.03 à 1.10 ; la cote d'un opérateur sera plus basse encore et un coupon de
-plusieurs matchs rapportera peu. C'est la conséquence directe de « le plus fiable, quelle que soit la cote ». Pour écarter les paris
-quasi certains, `PICK_MAX_PROBABILITY` (par exemple `0.9`, `90` ou `90 %`, entre 50 % et 100 %) plafonne la probabilité des paris
-automatiques : le pari le plus probable **sous** le plafond est alors retenu (et les lignes entières, remboursables, peuvent apparaître).
-Sans cette variable, il n'y a aucun plafond. Le contrôle de fiabilité (`paris` dans `/api/backtest`) mesure ces paris : probabilité
-annoncée contre fréquence réelle ; si les paris se réalisent nettement moins souvent que prévu, le serveur abaisse leurs probabilités
-(jamais l'inverse).
+**Le compromis.** Les cotes se multiplient : une cote totale de 5 revient à une probabilité combinée d'environ 20 % (1 ÷ 5), quel que soit
+le nombre de matchs. Le serveur choisit le pari de chaque match de façon que **le plus faible des paris soit le plus sûr possible** tout
+en atteignant la cote visée (les paris restants sont remontés tant que la cote reste atteinte). Avec 4 matchs, cela donne environ 67 % de
+chances par pari (cote d'environ 1,5 chacun) : le coupon complet gagne environ une fois sur cinq. Plus il y a de matchs, plus chaque pari
+peut être sûr (5 matchs : environ 72 %, 6 matchs : environ 76 %) ; avec 3 matchs, 58 % environ. Pour des paris plus sûrs, baissez
+`TOP_TARGET_ODDS` (3 : environ 76 % par pari avec 4 matchs, 2,5 : environ 80 %) ; pour une cote plus haute, augmentez-la, au prix de paris
+moins fiables.
+
+**Fenêtre de probabilité.** Chaque pari reste entre 60 % et 88 % (`PICK_MAX_PROBABILITY` : `0.9`, `90` ou `90 %`, entre 50 % et 100 %,
+pour le plafond). La borne basse descend à 55 % seulement quand c'est la seule façon d'atteindre la cote (trois matchs, par exemple).
+À probabilité égale, le pari le plus simple l'emporte (« plus de 0.5 buts » plutôt que « au moins une équipe marque plus de 0.5 buts ») et
+un pari remboursable cède devant un pari qui ne l'est pas. Aucune probabilité affichée ne dépasse 99 %.
+
+**Quand la cote visée n'est pas atteignable.** Le « Top Matchs » avec moins de 3 matchs exploitables, ou un « Auto » de 2 matchs ou moins :
+il faudrait des paris à moins de 55 %. Le serveur garde alors, pour chaque match, le pari fiable le plus proche de la cote visée, annonce
+`objectifCoteAtteint: false` et ajoute un `message` en clair (« ajoutez des matchs » pour « Auto »). Avec un seul match, la cote reste
+voisine de 1,5 à 2 : on ne peut pas faire 5 avec un pari fiable.
+
+**Relecture de l'IA.** L'IA peut corriger chaque probabilité de quelques points au plus (`AI_MAX_ADJUST_POINTS`). Si ses corrections font
+passer la cote totale sous 5, le serveur choisit de nouveaux paris avec une marge et relit les nouveaux (3 passes au plus). Une cote
+légèrement supérieure à 5 est donc possible, jamais en dessous quand l'objectif est atteignable.
+
+Le contrôle de fiabilité (`paris` dans `/api/backtest`) mesure ces paris : probabilité annoncée contre fréquence réelle ; si les paris se
+réalisent nettement moins souvent que prévu, le serveur abaisse leurs probabilités (jamais l'inverse).
 
 ### Reconnaissance des noms d'équipes
 
@@ -129,8 +142,9 @@ TheSportsDB, aux **noms alternatifs de chaque club** (lus automatiquement, un ap
 | `SPORTSDB_API_KEY` | Clé TheSportsDB. **Payante** pour être utile : la clé gratuite ne renvoie qu'une partie de la saison (15 matchs), elle est détectée et ignorée. Source de secours de football-data.org, et seule source pour l'Écosse et la Belgique. Peut aussi servir **seule** (voir « Couverture »). | — |
 | `DATA_PROVIDER` | Ordre des sources, ex. `footballdata,thesportsdb`. | selon les clés présentes |
 | `RATE_LIMIT_PER_MIN` / `RATE_LIMIT_AI_PER_MIN` | Demandes par minute et par adresse IP (général / analyses). | `90` / `30` |
-| `TOP_WINDOW_HOURS` / `TOP_MAX_WINDOW_HOURS` | Fenêtre du Top 3 (heures), élargie à la seconde valeur quand peu de matchs sont proches. | `72` / `168` |
-| `PICK_MAX_PROBABILITY` | **Facultatif.** Plafond de probabilité des paris choisis par « Top Matchs » et « Auto » (`0.9`, `90` ou `90 %`, entre 50 % et 100 %) pour écarter les paris quasi certains (cote proche de 1). Absent : aucun plafond, le pari le plus probable est toujours retenu. L'ancienne variable `TOP_TARGET_ODDS` n'existe plus (on peut la supprimer de Render). | aucun |
+| `TOP_WINDOW_HOURS` / `TOP_MAX_WINDOW_HOURS` | Fenêtre du Top 4 (heures), élargie à la seconde valeur quand peu de matchs sont proches. | `72` / `168` |
+| `TOP_TARGET_ODDS` | Cote totale visée par « Top Matchs » et « Auto » (de 1,5 à 50 ; la virgule est acceptée). 5 : environ 67 % de chances par pari avec 4 matchs ; 3 : environ 76 % ; 2,5 : environ 80 %. Plus la cote visée est haute, moins les paris sont sûrs. | `5` |
+| `PICK_MAX_PROBABILITY` | Plafond de probabilité des paris choisis par « Top Matchs » et « Auto » (`0.9`, `90` ou `90 %`, entre 50 % et 100 %) : écarte les paris quasi certains (cote proche de 1). | `0.88` (88 %) |
 | `MODEL_AUTOTUNE` | `false` pour désactiver le réglage automatique du modèle. | `true` |
 | `MODEL_HALF_LIFE_DAYS` / `MODEL_PRIOR_MATCHES` | Réglages de départ du modèle (affinés ensuite automatiquement). | `300` / `10` |
 | `MODEL_CALIBRATION` | **Interrupteur de sécurité** : `off` coupe la correction des totaux de buts (rythme des équipes et niveau de buts, voir plus bas) et redonne le modèle d'avant. À poser dans Render → Environment ; le service redémarre. | actif |
@@ -232,7 +246,7 @@ tranchées). `butsParMatch` compare le total de buts annoncé et réel (avec l'�
 Les huit premiers marchés (1-N-2, double chance, plus de 1.5 / 2.5 buts, les deux équipes marquent) alimentent aussi les
 tranches de calibrage ; cinq marchés de plus (plus de 3.5 buts, un ou deux buts de chaque équipe) servent à vérifier
 qu'un réglage n'en abîme pas d'autres. La section `paris` mesure les paris que « Top Matchs » et « Auto » choisiraient
-(le plus probable de chaque match, sous le plafond `PICK_MAX_PROBABILITY` s'il est défini) : probabilité moyenne annoncée, fréquence
+(pour chaque match, le pari le plus proche de la probabilité visée, d'environ 67 %, entre 60 % et le plafond `PICK_MAX_PROBABILITY`) : probabilité moyenne annoncée, fréquence
 réelle et écart ; un pari remboursé (ligne entière) n'y est ni gagné ni perdu.
 
 Le rapport est en lecture seule et sans effet sur les réponses du serveur. Sans paramètre, il utilise les réglages en service
@@ -310,7 +324,7 @@ l'indique (voir ci-dessous) et les analyses répondent « données indisponibles
   elle est signalée comme moins précise et la confiance n'y est jamais « élevée ». Les sélections nationales, les coupes nationales
   et les championnats absents de `src/leagues.js` ne sont pas couverts.
 - Les sélections de plusieurs matchs sont multipliées comme si les matchs étaient indépendants.
-- Un pari très probable a une cote très basse : « le plus fiable, quelle que soit la cote » donne souvent des cotes équitables de 1.03 à 1.10, que la
+- Un pari fiable a une cote basse : avec la cote totale visée de 5 et 4 matchs, chaque pari vaut environ 1,5 en cote équitable, que la
   marge d'un opérateur réduit encore. Probabilité élevée ne veut pas dire pari rentable.
 - Un modèle statistique ne « prédit » pas : il estime des fréquences. Aucun pari n'est sûr.
 

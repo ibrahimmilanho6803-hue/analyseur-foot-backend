@@ -54,15 +54,25 @@ test("EUROPE_HALF_LIFE_DAYS : borné entre 60 et 1500 jours, valeur illisible ig
   assert.equal(loadConfig({ EUROPE_HALF_LIFE_DAYS: "" }).europe.halfLifeDays, 365);
 });
 
-test("« Top Matchs » et « Auto » : aucune cote visée, aucune plage de probabilité, aucun plafond par défaut", () => {
+test("« Top Matchs » et « Auto » : quatre matchs, cote totale visée de 5, paris entre 60 % et 88 %", () => {
   const { top } = loadConfig({});
-  assert.deepEqual(top, { count: 3, windowHours: 72, maxWindowHours: 168, maxLegP: 1, budgetMs: 25000 });
-  assert.ok(!("targetOdds" in top) && !("minLegP" in top));
-  // Un ancien réglage TOP_TARGET_ODDS encore présent sur le serveur est simplement ignoré.
-  assert.deepEqual(loadConfig({ TOP_TARGET_ODDS: "2.5" }).top, top);
+  assert.deepEqual(top, { count: 4, windowHours: 72, maxWindowHours: 168, targetOdds: 5, minLegP: 0.6, maxLegP: 0.88, budgetMs: 25000 });
 });
 
-test("PICK_MAX_PROBABILITY : plafond facultatif, écrit en 0.95, 95 ou « 95 % », borné entre 50 % et 100 %, valeur illisible = aucun plafond", () => {
+test("TOP_TARGET_ODDS : cote totale visée, écrite avec un point ou une virgule, bornée entre 1,5 et 50, valeur illisible = 5", () => {
+  const target = (v) => loadConfig({ TOP_TARGET_ODDS: v }).top.targetOdds;
+  assert.equal(target("3"), 3);
+  assert.equal(target("2.5"), 2.5);
+  assert.equal(target("7,5"), 7.5);
+  assert.equal(target(" 4 "), 4);
+  assert.equal(target("1"), 1.5, "une cote visée sous 1,5 ne laisserait aucun choix : bornée");
+  assert.equal(target("0.2"), 1.5);
+  assert.equal(target("500"), 50);
+  for (const v of [undefined, "", "abc", "NaN"]) assert.equal(target(v), 5, JSON.stringify(v));
+  assert.equal(loadConfig({}).top.targetOdds, 5);
+});
+
+test("PICK_MAX_PROBABILITY : plafond facultatif, écrit en 0.95, 95 ou « 95 % », borné entre 50 % et 100 %, valeur illisible = 88 %", () => {
   const cap = (v) => loadConfig({ PICK_MAX_PROBABILITY: v }).top.maxLegP;
   for (const v of ["0.95", "95", "95 %", "95%", " 95 ", "0,95"]) assert.ok(Math.abs(cap(v) - 0.95) < 1e-12, JSON.stringify(v));
   assert.equal(cap("0.9"), 0.9);
@@ -72,5 +82,5 @@ test("PICK_MAX_PROBABILITY : plafond facultatif, écrit en 0.95, 95 ou « 95 % �
   assert.equal(cap("100"), 1);
   assert.equal(cap("1"), 1);
   assert.equal(cap("250"), 1);
-  for (const v of [undefined, "", "abc", "0", "-5", "NaN", "Infinity"]) assert.equal(cap(v), 1, JSON.stringify(v));
+  for (const v of [undefined, "", "abc", "0", "-5", "NaN", "Infinity"]) assert.equal(cap(v), 0.88, JSON.stringify(v));
 });
