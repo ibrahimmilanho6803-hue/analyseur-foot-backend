@@ -48,6 +48,16 @@ test("paris automatiques avec un plafond de probabilité : plus de paris quasi c
   assert.ok(Math.abs(capped.paris.ecart) < 0.03, `écart ${capped.paris.ecart}`);
 });
 
+test("paris automatiques d'un coupon équilibré : des paris proches de la probabilité visée, entre le plancher et le plafond, bien calibrés", () => {
+  const near = runBacktest(leagues, { ...OPTS, pick: { target: 0.67, minP: 0.6, maxP: 0.88 } });
+  assert.match(near.paris.description, /le plus proche de 67 % de chances, entre 60 % et 88 %/);
+  assert.equal(near.paris.matchs > 0.8 * near.matchsEvalues, true, `${near.paris.matchs} sur ${near.matchsEvalues}`);
+  assert.ok(Math.abs(near.paris.probabiliteMoyennePredite - 0.67) < 0.025, `${near.paris.probabiliteMoyennePredite}`);
+  assert.ok(Math.abs(near.paris.ecart) < 0.04, `écart ${near.paris.ecart}`);
+  const free = runBacktest(leagues, OPTS);
+  assert.ok(near.paris.probabiliteMoyennePredite < free.paris.probabiliteMoyennePredite - 0.2, "bien moins sûrs que les paris les plus probables");
+});
+
 test("tallyPick : un pari remboursé n'est ni gagné ni perdu, il n'entre pas dans le décompte", () => {
   const picks = { n: 0, sp: 0, hits: 0 };
   tallyPick(picks, { label: "Plus de 2 buts", p: 0.7 }, 1, 1); // exactement 2 buts : remboursé

@@ -1,7 +1,7 @@
 "use strict";
 
 const { round } = require("./util");
-const { bestForFixture, selectTop } = require("./picks");
+const { selectCoupon, selectAll } = require("./picks");
 const { resolveMarket, refundInfo } = require("./markets");
 const { matchStats } = require("./stats");
 const { WARNING_ODDS, MAX_SHOWN } = require("./analysis");
@@ -9,6 +9,21 @@ const { isCup } = require("./leagues");
 
 const TOP_TTL_MS = 15 * 60000;
 const PARTIAL_TTL_MS = 60000;
+// Marge sur l'objectif de cote : la relecture de l'IA peut corriger chaque probabilité de quelques points, donc la cote totale finale
+// s'écarte un peu de celle du modèle. Si malgré cette marge la cote finale reste sous l'objectif, on recommence le choix avec une marge
+// plus grande (MAX_PASSES essais au plus ; les paris déjà relus ne sont pas relus : l'IA garde ses réponses en mémoire).
+const SAFETY = 1.04;
+const MAX_PASSES = 3;
+
+// Cote totale telle qu'on peut la refaire à partir de ce que l'écran montre (probabilités à 1 décimale, cotes à 2 décimales) : le plus bas de
+// 1 ÷ le produit des probabilités affichées (ce que calcule « Mon coupon » une fois les paris ajoutés) et du produit des cotes affichées
+// (ce que fait un parieur à la main). Atteindre la cote visée avec ce nombre, c'est l'atteindre quelle que soit la façon de refaire le calcul.
+function totalOdds(shown) {
+  if (!shown.length) return 0;
+  const byProbability = 1 / shown.reduce((acc, x) => acc * (x.probabilite / 100), 1);
+  const byOdds = shown.reduce((acc, x) => acc * x.coteEstimee, 1);
+  return Math.min(byProbability, byOdds);
+}
 
 // `europe` (facultatif) : matchs de coupes d'Europe et comparaison entre championnats (europe.js). « Top Matchs » ne retient des matchs
 // de coupe que si TOP_CUPS n'est pas coupé ; le mode Auto peut analyser n'importe quel match qu'on lui donne.
@@ -18,9 +33,8 @@ function createCoupons({ config, data, analysis, europe = null, now = Date.now, 
   const { computeCore, reviewWithAi, aiPublic, finalProbability, confidence, modelJustification } = analysis;
   const { pct1, unresolved, unresolvedFrom, crossPublic } = analysis.helpers;
 
-  // Pari le plus probable d'un match (le plus fiable, quelle que soit sa cote), avec les probabilités abaissées de la correction mesurée
-  // sur les paris automatiques (jamais relevées).
-  const bestOf = (core, shift) => bestForFixture(core.probs.map((x) => ({ ...x, p: Math.max(0.01, x.p + shift) })), { maxP: top.maxLegP });
+  // Probabilités de tous les paris d'un match, abaissées de la correction mesurée sur les paris automatiques (jamais relevées).
+  const calibrated = (core, shift) => core.probs.map((x) => ({ ...x, p: Math.max(0.01, x.p + shift) }));
 
   // Le pari tel que l'IA et l'écran le reçoivent : un pari remboursable (ligne entière) porte la probabilité et le cas du remboursement.
   const betOf = (best) => {
@@ -28,7 +42,7 @@ function createCoupons({ config, data, analysis, europe = null, now = Date.now, 
     return { label: best.label, p: best.p, ...(market ? { push: best.push, refund: { p: best.push, when: market.refundWhen } } : {}) };
   };
 
-  // Matchs à venir de tous les championnats prêts (et des coupes d'Europe), avec leur meilleur pari.
+  // Matchs à venir de tous les championnats prêts (et des coupes d'Europe), avec les probabilités de tous leurs paris.
   function gather(ready, nowMs, hours, minLevel, shift) {
     const until = nowMs + hours * 3600000;
     const out = [];
@@ -37,9 +51,7 @@ function createCoupons({ config, data, analysis, europe = null, now = Date.now, 
         if (f.kickoff <= nowMs || f.kickoff > until) continue;
         const core = computeCore(ld, f.home.id, f.away.id);
         if (core.quality.level < minLevel) continue;
-        const best = bestOf(core, shift);
-        if (!best) continue;
-        out.push({ id: f.id, leagueKey: ld.league.key, kickoff: f.kickoff, quality: core.quality.level, best, fixture: f, leagueData: ld, core });
+        out.push({ id: f.id, leagueKey: ld.league.key, kickoff: f.kickoff, quality: core.quality.level, probs: calibrated(core, shift), fixture: f, leagueData: ld, core });
       }
     }
     // Matchs de coupes d'Europe : les deux clubs viennent de championnats différents, l'estimation est donc moins précise. Pour ne
@@ -55,14 +67,12 @@ function createCoupons({ config, data, analysis, europe = null, now = Date.now, 
         const shared = home.rated && away.rated && home.leagueKey === away.leagueKey ? ready.find((d) => d.league.key === home.leagueKey) : null;
         const core = shared ? computeCore(shared, home.id, away.id) : europe.core(home, away);
         if (!core || core.quality.level < Math.max(1, minLevel)) continue;
-        const best = bestOf(core, shift);
-        if (!best) continue;
         out.push({
           id: f.id,
           leagueKey: f.cup.key,
           kickoff: f.kickoff,
           quality: core.quality.level,
-          best,
+          probs: calibrated(core, shift),
           fixture: f,
           leagueData: { league: f.cup, finished: europe.relevantFinished(home, away), fixtures: [] },
           core,
@@ -102,6 +112,63 @@ function createCoupons({ config, data, analysis, europe = null, now = Date.now, 
     };
   }
 
+  // Choix avec la marge demandée sur l'objectif de cote. Si cet objectif relevé est hors d'atteinte avec ces matchs, on essaie avec la moitié
+  // de la marge, puis sans marge : mieux vaut un objectif atteint de justesse (la relecture de l'IA peut le faire manquer) qu'un coupon
+  // qui le manque d'avance.
+  const chooseWithMargin = (select, margin) => {
+    let sel = null;
+    for (const m of [margin, 1 + (margin - 1) / 2, 1]) {
+      sel = select(top.targetOdds * m);
+      if (sel.targetReached) break;
+    }
+    return sel;
+  };
+
+  // Un pari retenu, relu par l'IA : sa probabilité finale est celle du modèle plus la petite correction de l'IA (voir finalProbability).
+  async function reviewPick(leg, shift) {
+    const c = leg.fixture; // le match candidat, avec son modèle
+    const f = c.fixture;
+    const bet = betOf(leg);
+    const stats = matchStats(c.leagueData.finished, f.home.id, f.away.id);
+    const ctx = {
+      home: f.home.name,
+      away: f.away.name,
+      competition: c.leagueData.league.name,
+      kickoff: f.kickoff,
+      bet,
+      lh: c.core.lh,
+      la: c.core.la,
+      outcomes: c.core.outcomes,
+      quality: c.core.quality,
+      stats,
+      ...(c.core.cross ? { cross: c.core.cross } : {}),
+    };
+    const res = await reviewWithAi(ctx, { key: `top:${f.id}:${bet.label}:${Math.round(bet.p * 100)}`, timeoutMs: 20000 });
+    const review = res.review || null;
+    return { f, c, stats, bet, res, review, fin: finalProbability(bet.p, review, false), shift };
+  }
+
+  // Choisit les matchs et leurs paris pour que la cote totale atteigne l'objectif, les fait relire par l'IA, puis vérifie la cote FINALE
+  // (après la correction de l'IA). Trop basse : nouveau choix avec une marge plus grande. On garde le meilleur essai.
+  async function chooseTop(cands, shift) {
+    let margin = SAFETY;
+    let best = null;
+    let previous = "";
+    for (let pass = 1; pass <= MAX_PASSES; pass++) {
+      const sel = chooseWithMargin((target) => selectCoupon(cands, { count: top.count, targetOdds: target, minP: top.minLegP, maxP: top.maxLegP }), margin);
+      const signature = sel.legs.map((l) => `${l.fixture.id}:${l.label}`).join("|");
+      if (!sel.legs.length || signature === previous) break; // même choix qu'à l'essai précédent : le refaire ne changerait rien
+      previous = signature;
+      const picks = await Promise.all(sel.legs.map((leg) => reviewPick(leg, shift)));
+      const odds = totalOdds(picks.map((x) => ({ probabilite: pct1(x.fin.p), coteEstimee: round(1 / x.fin.p, 2) })));
+      const reached = Number(odds.toFixed(2)) >= top.targetOdds; // comparé à la cote affichée (2 décimales)
+      if (!best || reached || odds > best.odds) best = { picks, odds, reached };
+      if (reached || !sel.targetReached) break; // atteint, ou hors d'atteinte avec ces matchs : un nouvel essai ne changerait rien
+      margin = Math.min((1 / sel.joint / odds) * 1.01, 1.5); // l'IA a retiré (cote du modèle ÷ cote finale) à la cote : le prochain choix vise d'autant plus haut, plus 1 %
+    }
+    return best;
+  }
+
   async function computeTop() {
     // Championnats principaux et coupes d'Europe : les championnats complémentaires ne servent pas à choisir le « Top Matchs ».
     const loaded = await data.ensureAll({ budgetMs: top.budgetMs, scope: "essential" });
@@ -127,6 +194,7 @@ function createCoupons({ config, data, analysis, europe = null, now = Date.now, 
     const base = {
       genereLe: new Date(nowMs).toISOString(),
       fenetreHeures: windowHours,
+      objectifCote: top.targetOdds,
       avertissement: WARNING_ODDS,
       complet: pending.length === 0,
       donnees: {
@@ -138,46 +206,31 @@ function createCoupons({ config, data, analysis, europe = null, now = Date.now, 
       },
     };
     if (!cands.length) {
-      return { ...base, topMatches: [], coteTotale: "0.00", probabiliteCombinee: 0, ia: { statut: "non_applicable" }, message: `Aucun match à venir trouvé dans les ${windowHours} prochaines heures.` };
+      return { ...base, topMatches: [], coteTotale: "0.00", probabiliteCombinee: 0, objectifCoteAtteint: false, ia: { statut: "non_applicable" }, message: `Aucun match à venir trouvé dans les ${windowHours} prochaines heures.` };
     }
 
-    const picks = await Promise.all(
-      selectTop(cands, { count: top.count }).map(async (c) => {
-        const f = c.fixture;
-        const bet = betOf(c.best);
-        const stats = matchStats(c.leagueData.finished, f.home.id, f.away.id);
-        const ctx = {
-          home: f.home.name,
-          away: f.away.name,
-          competition: c.leagueData.league.name,
-          kickoff: f.kickoff,
-          bet,
-          lh: c.core.lh,
-          la: c.core.la,
-          outcomes: c.core.outcomes,
-          quality: c.core.quality,
-          stats,
-          ...(c.core.cross ? { cross: c.core.cross } : {}),
-        };
-        const res = await reviewWithAi(ctx, { key: `top:${f.id}:${bet.label}:${Math.round(bet.p * 100)}`, timeoutMs: 20000 });
-        const review = res.review || null;
-        return { f, c, stats, bet, res, review, fin: finalProbability(bet.p, review, false), shift };
-      })
-    );
+    const chosen = await chooseTop(cands, shift);
+    if (!chosen) {
+      return { ...base, topMatches: [], coteTotale: "0.00", probabiliteCombinee: 0, objectifCoteAtteint: false, ia: { statut: "non_applicable" }, message: `Aucun pari exploitable trouvé dans les ${windowHours} prochaines heures.` };
+    }
+    const { picks, reached, odds } = chosen;
     picks.sort((x, y) => y.fin.p - x.fin.p);
 
     const joint = picks.reduce((acc, x) => acc * x.fin.p, 1);
-    const odds = picks.reduce((acc, x) => acc / x.fin.p, 1);
     const okCount = picks.filter((x) => x.res.statut === "ok").length;
     const statuts = picks.map((x) => x.res.statut);
     const iaStatut = okCount === picks.length ? "ok" : okCount > 0 ? "partielle" : statuts.every((s) => s === "desactivee") ? "desactivee" : "indisponible";
+    const notes = [];
+    if (picks.length < top.count) notes.push(`Seulement ${picks.length} match(s) exploitable(s) trouvé(s) dans les ${windowHours} prochaines heures.`);
+    if (!reached) notes.push(`La cote visée (${top.targetOdds}) n'est pas atteinte avec les matchs disponibles (cote totale : ${odds.toFixed(2)}).`);
     return {
       ...base,
       topMatches: picks.map(entryFor),
       coteTotale: odds.toFixed(2),
       probabiliteCombinee: pct1(joint),
+      objectifCoteAtteint: reached,
       ia: { statut: iaStatut, modele: config.anthropic.model },
-      ...(picks.length < top.count ? { message: `Seulement ${picks.length} match(s) exploitable(s) trouvé(s) dans les ${windowHours} prochaines heures.` } : {}),
+      ...(notes.length ? { message: notes.join(" ") } : {}),
       ...(cands.some((c) => c.quality === 0) ? { avertissementDonnees: "Certaines équipes ont peu de matchs récents : estimation moins fiable." } : {}),
     };
   }
@@ -213,33 +266,77 @@ function createCoupons({ config, data, analysis, europe = null, now = Date.now, 
     }
   }
 
-  // Coupon automatique : pour chaque match saisi, le pari le plus probable (le plus fiable), quelle que soit sa cote.
-  async function autoCoupon(matches) {
+  // Coupon automatique : un pari pour chaque match saisi, choisi pour que la cote totale atteigne l'objectif avec des paris aussi fiables
+  // que possible (voir picks.js). Avec trop peu de matchs (moins de 3), un objectif de 5 n'est pas atteignable avec des paris fiables :
+  // le coupon est alors le plus proche possible de l'objectif, et le message le dit. `withAi: false` : modèle statistique seul.
+  async function autoCoupon(matches, { withAi = true } = {}) {
     await analysis.loadAll();
-    const results = await Promise.all(
+    const shift = analysis.calibration.pickShift;
+    const prepared = await Promise.all(
       matches.map(async (m, index) => {
         try {
           const r = analysis.resolveTeams(m.equipe1, m.equipe2);
-          if (r.state !== "ok") return { index, ...unresolvedFrom(r) };
+          if (r.state !== "ok") return { index, failure: unresolvedFrom(r) };
           const { core } = await analysis.prepare(r);
-          const pick = bestOf(core, analysis.calibration.pickShift);
-          if (!pick) return { index, ...unresolved("marche_inconnu", { message: "Aucun pari exploitable pour ce match." }) };
-          const leg = await analysis.analyzeLeg({ equipe1: r.home.name, equipe2: r.away.name, typePari: pick.label }, { shift: analysis.calibration.pickShift });
-          return { index, ...leg };
+          return { index, r, probs: calibrated(core, shift) };
         } catch (e) {
           log.error(`[auto] ${e.message}`);
-          return { index, ...unresolved("erreur", { message: "Analyse impossible pour ce match." }) };
+          return { index, failure: unresolved("erreur", { message: "Analyse impossible pour ce match." }) };
         }
       })
     );
+    const results = new Array(matches.length);
+    const usable = [];
+    for (const x of prepared) {
+      if (x.failure) results[x.index] = { index: x.index, ...x.failure };
+      else usable.push(x);
+    }
+
+    const analyzeAs = async (u, label) => {
+      try {
+        const leg = await analysis.analyzeLeg({ equipe1: u.r.home.name, equipe2: u.r.away.name, typePari: label }, { shift, withAi });
+        return { index: u.index, ...leg };
+      } catch (e) {
+        log.error(`[auto] ${e.message}`);
+        return { index: u.index, ...unresolved("erreur", { message: "Analyse impossible pour ce match." }) };
+      }
+    };
+    let margin = SAFETY;
+    let best = null;
+    let previous = "";
+    for (let pass = 1; usable.length && pass <= MAX_PASSES; pass++) {
+      const sel = chooseWithMargin((target) => selectAll(usable.map((u) => ({ probs: u.probs })), { targetOdds: target, minP: top.minLegP, maxP: top.maxLegP }), margin);
+      const signature = sel.legs.map((l) => l.label).join("|");
+      if (signature === previous) break; // même choix qu'à l'essai précédent : le refaire ne changerait rien
+      previous = signature;
+      const legs = await Promise.all(usable.map((u, i) => analyzeAs(u, sel.legs[i].label)));
+      const done = legs.filter((x) => x.etat === "ok");
+      const odds = totalOdds(done);
+      const reached = done.length > 0 && Number(odds.toFixed(2)) >= top.targetOdds;
+      if (!best || reached || odds > best.odds) best = { legs, odds, reached, possible: sel.targetReached };
+      if (reached || !sel.targetReached || !done.length) break;
+      margin = Math.min((1 / sel.joint / odds) * 1.01, 1.5); // l'IA a retiré (cote du modèle ÷ cote finale) à la cote : le prochain choix vise d'autant plus haut, plus 1 %
+    }
+    if (best) for (const leg of best.legs) results[leg.index] = leg;
+
     const ok = results.filter((x) => x.etat === "ok");
     const joint = ok.reduce((acc, x) => acc * (x.probabilite / 100), 1);
-    const odds = ok.reduce((acc, x) => acc * x.coteEstimee, 1);
+    const odds = totalOdds(ok);
+    const reached = ok.length ? Number(odds.toFixed(2)) >= top.targetOdds : null;
+    let message = "";
+    if (reached === false) {
+      const n = ok.length;
+      message = `La cote visée (${top.targetOdds}) n'est pas atteinte (cote totale : ${odds.toFixed(2)}).`;
+      message += best && !best.possible ? ` Avec ${n} match${n > 1 ? "s" : ""}, des paris fiables ne permettent pas d'aller plus haut : ajoutez des matchs.` : " La relecture de l'IA a légèrement modifié les probabilités.";
+    }
     return {
       resultats: results,
       analyses: ok.length,
       probabiliteCombinee: ok.length ? pct1(joint) : null,
       coteTotale: ok.length ? odds.toFixed(2) : null,
+      objectifCote: top.targetOdds,
+      objectifCoteAtteint: reached,
+      ...(message ? { message } : {}),
       avertissement: WARNING_ODDS,
     };
   }

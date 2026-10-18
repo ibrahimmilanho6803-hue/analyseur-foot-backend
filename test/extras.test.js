@@ -85,6 +85,6 @@ test("un championnat complémentaire en panne ne gêne rien d'autre et est nomm�
   assert.equal(missing.etat, "equipe_inconnue");
   assert.match(missing.message, /indisponibles pour : Championship/);
   const top = await w.coupons.topMatches();
-  assert.equal(top.topMatches.length, 3);
+  assert.equal(top.topMatches.length, 4);
   assert.equal(top.complet, true);
 });

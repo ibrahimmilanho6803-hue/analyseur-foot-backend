@@ -40,11 +40,11 @@ test("résultats récents bien plus pauvres en buts que prévu : les probabilit�
   const w = bigWorld();
   const rand = mulberry32(5);
   const cut = NOW - 150 * DAY;
-  // Depuis cinq mois, les scores ne suivent plus du tout le modèle (0,9 et 0,7 but par équipe, quelle que soit l'équipe) : les paris les plus
-  // sûrs (« plus de 0.5 buts », « équipe 2 moins de 2.5 buts »…) se réalisent nettement moins souvent que les 93 % annoncés.
+  // Depuis cinq mois, les scores ne suivent plus du tout le modèle (0,5 et 0,35 but par équipe, quelle que soit l'équipe) : les paris que
+  // l'application choisit (autour de 67 % de chances : « plus de 1.5 buts », « victoire ou nul »…) se réalisent nettement moins souvent.
   for (const key of Object.keys(w.store)) {
     for (const season of ["cur", "prev"]) {
-      w.store[key][season] = w.store[key][season].map((m) => (m.status === "finished" && m.kickoff >= cut ? { ...m, hg: poissonSample(0.9, rand), ag: poissonSample(0.7, rand) } : m));
+      w.store[key][season] = w.store[key][season].map((m) => (m.status === "finished" && m.kickoff >= cut ? { ...m, hg: poissonSample(0.5, rand), ag: poissonSample(0.35, rand) } : m));
     }
   }
   const tuner = createTuner({ config: w.config, data: w.data, analysis: w.analysis, now: () => w.clock.t, log: quiet });

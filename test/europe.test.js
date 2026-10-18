@@ -360,7 +360,7 @@ test("mode Auto sans comparaison entre championnats : le match entre deux champi
 test("Top Matchs : les matchs de Ligue des champions peuvent être proposés et sont signalés comme moins précis", async () => {
   const w = world({ fixtureHours: [] }); // aucun match de championnat : seule la coupe a des matchs à venir
   const r = await w.coupons.topMatches();
-  assert.equal(r.topMatches.length, 3);
+  assert.equal(r.topMatches.length, 4);
   assert.ok(r.topMatches.every((m) => m.competition === "Ligue des champions"));
   assert.deepEqual(r.donnees.coupesPretes, ["UCL"]);
   assert.deepEqual(r.donnees.championnatsPrets, ["PL", "PD", "SA"]);
@@ -372,7 +372,7 @@ test("Top Matchs : les matchs de Ligue des champions peuvent être proposés et 
     assert.ok(m.statsHome && m.statsAway);
     assert.ok(m.probabilite > 50 && m.probabilite <= 99);
   }
-  assert.equal(new Set(r.topMatches.map((m) => m.id)).size, 3);
+  assert.equal(new Set(r.topMatches.map((m) => m.id)).size, 4);
 });
 
 test("Top Matchs : une confrontation de coupe entre deux clubs du même championnat est calculée par le modèle du championnat, sans mention de « championnats différents »", async () => {
@@ -392,11 +392,11 @@ test("Top Matchs : une confrontation de coupe entre deux clubs du même champion
   close(m.butsAttendus.equipe2, domestic.la, 0.006, "buts attendus du club qui se déplace");
 });
 
-test("Top Matchs : championnats et coupes ensemble, jamais plus de trois matchs et jamais un match deux fois", async () => {
+test("Top Matchs : championnats et coupes ensemble, jamais plus de quatre matchs et jamais un match deux fois", async () => {
   const w = world();
   const r = await w.coupons.topMatches();
-  assert.equal(r.topMatches.length, 3);
-  assert.equal(new Set(r.topMatches.map((m) => m.id)).size, 3);
+  assert.equal(r.topMatches.length, 4);
+  assert.equal(new Set(r.topMatches.map((m) => m.id)).size, 4);
   assert.deepEqual(r.donnees.coupesPretes, ["UCL"]);
   const product = r.topMatches.reduce((acc, m) => acc * (100 / m.probabilite), 1);
   close(Number(r.coteTotale), product, 0.05, "cote totale");
@@ -416,7 +416,7 @@ test("TOP_CUPS=off : « Top Matchs » ne retient plus de match de coupe, mais le
 test("Top Matchs : une coupe en panne ne bloque pas les championnats", async () => {
   const w = world({ failing: ["UCL"] });
   const r = await w.coupons.topMatches();
-  assert.equal(r.topMatches.length, 3);
+  assert.equal(r.topMatches.length, 4);
   assert.ok(r.topMatches.every((m) => m.competition !== "Ligue des champions"));
   assert.deepEqual(r.donnees.coupesPretes, []);
   assert.deepEqual(r.donnees.enEchec.map((f) => f.key), ["UCL"]);
